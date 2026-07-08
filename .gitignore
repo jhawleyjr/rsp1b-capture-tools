@@ -1,0 +1,5 @@
+build/
+captures/
+.DS_Store
+*.o
+*.dSYM/
