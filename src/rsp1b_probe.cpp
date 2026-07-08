@@ -103,6 +103,28 @@ void printStats(const StreamStats& stats) {
     std::cout << "  resets=" << stats.resetCount.load(std::memory_order_relaxed) << '\n';
 }
 
+bool requestBiasTOffForShutdown(HANDLE dev,
+                                sdrplay_api_DeviceParamsT* deviceParams,
+                                bool deviceInitialised) {
+    if (deviceParams == nullptr || deviceParams->rxChannelA == nullptr) {
+        std::cout << "Shutdown: Bias-T OFF request skipped; device params unavailable.\n";
+        return false;
+    }
+
+    deviceParams->rxChannelA->rsp1aTunerParams.biasTEnable = 0;
+    std::cout << "Shutdown: Bias-T requested OFF.\n";
+
+    if (!deviceInitialised) {
+        return true;
+    }
+
+    return checkCall("sdrplay_api_Update(Rsp1a_BiasTControl)",
+                     sdrplay_api_Update(dev,
+                                        sdrplay_api_Tuner_A,
+                                        sdrplay_api_Update_Rsp1a_BiasTControl,
+                                        sdrplay_api_Update_Ext1_None));
+}
+
 }  // namespace
 
 int main() {
@@ -112,10 +134,16 @@ int main() {
     bool apiLocked = false;
     bool deviceSelected = false;
     bool deviceInitialised = false;
+    bool biasTShutdownRequested = false;
     sdrplay_api_DeviceT chosenDevice{};
+    sdrplay_api_DeviceParamsT* deviceParams = nullptr;
     int exitCode = 1;
 
     auto cleanup = [&]() {
+        if (deviceSelected && !biasTShutdownRequested) {
+            biasTShutdownRequested =
+                requestBiasTOffForShutdown(chosenDevice.dev, deviceParams, deviceInitialised);
+        }
         if (deviceInitialised) {
             checkCall("sdrplay_api_Uninit", sdrplay_api_Uninit(chosenDevice.dev));
             deviceInitialised = false;
@@ -192,7 +220,6 @@ int main() {
     }
     apiLocked = false;
 
-    sdrplay_api_DeviceParamsT* deviceParams = nullptr;
     if (!checkCall("sdrplay_api_GetDeviceParams",
                    sdrplay_api_GetDeviceParams(chosenDevice.dev, &deviceParams))) {
         cleanup();
@@ -245,6 +272,13 @@ int main() {
 
     std::cout << "Streaming for about 1 second...\n";
     std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    biasTShutdownRequested =
+        requestBiasTOffForShutdown(chosenDevice.dev, deviceParams, deviceInitialised);
+    if (!biasTShutdownRequested) {
+        cleanup();
+        return exitCode;
+    }
 
     if (!checkCall("sdrplay_api_Uninit", sdrplay_api_Uninit(chosenDevice.dev))) {
         cleanup();

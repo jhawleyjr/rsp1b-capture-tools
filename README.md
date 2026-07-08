@@ -101,6 +101,7 @@ Optional:
 The default output folder is `captures/`. If `--out` is omitted, the capture utility writes a timestamped `.iq` file there. For `captures/test_2s.iq`, metadata is written to `captures/test_2s.txt`.
 
 Bias-T defaults to off. The capture utility enables Bias-T only when `--bias-t 1` is explicitly provided, and it prints a warning before doing so.
+During shutdown, both tools explicitly request Bias-T off before uninitializing and releasing the device.
 
 Raw IQ output format:
 
