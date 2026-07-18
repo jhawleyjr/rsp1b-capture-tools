@@ -1,16 +1,17 @@
-#include <sdrplay_api.h>
+#include "rsp1b_device.hpp"
+#include "signal_stop.hpp"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <string>
 #include <thread>
 
 namespace {
 
-struct StreamStats {
+struct StreamStatistics {
     std::atomic<std::uint64_t> callbackCount{0};
     std::atomic<std::uint64_t> totalSamples{0};
     std::atomic<std::uint64_t> resetCount{0};
@@ -20,275 +21,133 @@ struct StreamStats {
     std::atomic<int> xqMax{std::numeric_limits<short>::min()};
 };
 
-void updateMin(std::atomic<int>& target, int value) {
+void updateMinimum(std::atomic<int>& target, int value) {
     int current = target.load(std::memory_order_relaxed);
     while (value < current &&
            !target.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
     }
 }
 
-void updateMax(std::atomic<int>& target, int value) {
+void updateMaximum(std::atomic<int>& target, int value) {
     int current = target.load(std::memory_order_relaxed);
     while (value > current &&
            !target.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
     }
 }
 
-const char* errorString(sdrplay_api_ErrT err) {
-    const char* text = sdrplay_api_GetErrorString(err);
-    return text != nullptr ? text : "(no error string)";
-}
-
-bool checkCall(const char* name, sdrplay_api_ErrT err) {
-    std::cout << name << " -> " << static_cast<int>(err) << " ("
-              << errorString(err) << ")\n";
-    return err == sdrplay_api_Success;
-}
-
-void printDevice(const sdrplay_api_DeviceT& device, unsigned int index) {
-    std::cout << "Device[" << index << "]"
-              << " SerNo=" << device.SerNo
-              << " hwVer=" << static_cast<unsigned int>(device.hwVer)
-              << " tuner=" << static_cast<int>(device.tuner)
-              << " valid=" << static_cast<unsigned int>(device.valid)
-              << " dev=" << device.dev << '\n';
-}
-
-void streamACallback(short* xi,
-                     short* xq,
-                     sdrplay_api_StreamCbParamsT*,
-                     unsigned int numSamples,
-                     unsigned int reset,
-                     void* cbContext) {
-    auto* stats = static_cast<StreamStats*>(cbContext);
-    if (stats == nullptr) {
+void streamCallback(short* xi,
+                    short* xq,
+                    sdrplay_api_StreamCbParamsT*,
+                    unsigned int sampleCount,
+                    unsigned int reset,
+                    void* callbackContext) {
+    auto* deviceContext = static_cast<rsp1b::DeviceCallbackContext*>(callbackContext);
+    if (deviceContext == nullptr || deviceContext->streamContext == nullptr ||
+        (sampleCount != 0 && (xi == nullptr || xq == nullptr))) {
+        if (deviceContext != nullptr && deviceContext->events != nullptr) {
+            deviceContext->events->stopRequested.store(true, std::memory_order_relaxed);
+        }
         return;
     }
 
-    stats->callbackCount.fetch_add(1, std::memory_order_relaxed);
-    stats->totalSamples.fetch_add(numSamples, std::memory_order_relaxed);
+    auto* statistics = static_cast<StreamStatistics*>(deviceContext->streamContext);
+    statistics->callbackCount.fetch_add(1, std::memory_order_relaxed);
+    statistics->totalSamples.fetch_add(sampleCount, std::memory_order_relaxed);
     if (reset != 0) {
-        stats->resetCount.fetch_add(1, std::memory_order_relaxed);
+        statistics->resetCount.fetch_add(1, std::memory_order_relaxed);
     }
 
-    for (unsigned int i = 0; i < numSamples; ++i) {
-        updateMin(stats->xiMin, xi[i]);
-        updateMax(stats->xiMax, xi[i]);
-        updateMin(stats->xqMin, xq[i]);
-        updateMax(stats->xqMax, xq[i]);
+    for (unsigned int index = 0; index < sampleCount; ++index) {
+        updateMinimum(statistics->xiMin, xi[index]);
+        updateMaximum(statistics->xiMax, xi[index]);
+        updateMinimum(statistics->xqMin, xq[index]);
+        updateMaximum(statistics->xqMax, xq[index]);
     }
 }
 
-void eventCallback(sdrplay_api_EventT eventId,
-                   sdrplay_api_TunerSelectT tuner,
-                   sdrplay_api_EventParamsT*,
-                   void*) {
-    std::cout << "Event callback: eventId=" << static_cast<int>(eventId)
-              << " tuner=" << static_cast<int>(tuner) << '\n';
-}
-
-void printStats(const StreamStats& stats) {
-    const auto totalSamples = stats.totalSamples.load(std::memory_order_relaxed);
-    std::cout << "Stream stats:\n";
-    std::cout << "  callbacks=" << stats.callbackCount.load(std::memory_order_relaxed) << '\n';
-    std::cout << "  totalSamples=" << totalSamples << '\n';
-    if (totalSamples > 0) {
-        std::cout << "  xiMin=" << stats.xiMin.load(std::memory_order_relaxed) << '\n';
-        std::cout << "  xiMax=" << stats.xiMax.load(std::memory_order_relaxed) << '\n';
-        std::cout << "  xqMin=" << stats.xqMin.load(std::memory_order_relaxed) << '\n';
-        std::cout << "  xqMax=" << stats.xqMax.load(std::memory_order_relaxed) << '\n';
+void printStatistics(const StreamStatistics& statistics) {
+    const std::uint64_t totalSamples = statistics.totalSamples.load(std::memory_order_relaxed);
+    std::cout << "Stream statistics:\n"
+              << "  callbacks="
+              << statistics.callbackCount.load(std::memory_order_relaxed) << '\n'
+              << "  total_complex_samples=" << totalSamples << '\n'
+              << "  resets=" << statistics.resetCount.load(std::memory_order_relaxed) << '\n';
+    if (totalSamples != 0) {
+        std::cout << "  xi_min=" << statistics.xiMin.load(std::memory_order_relaxed) << '\n'
+                  << "  xi_max=" << statistics.xiMax.load(std::memory_order_relaxed) << '\n'
+                  << "  xq_min=" << statistics.xqMin.load(std::memory_order_relaxed) << '\n'
+                  << "  xq_max=" << statistics.xqMax.load(std::memory_order_relaxed) << '\n';
     } else {
-        std::cout << "  xiMin/xiMax/xqMin/xqMax unavailable: no samples received\n";
+        std::cout << "  sample ranges unavailable: no samples received\n";
     }
-    std::cout << "  resets=" << stats.resetCount.load(std::memory_order_relaxed) << '\n';
 }
 
-bool requestBiasTOffForShutdown(HANDLE dev,
-                                sdrplay_api_DeviceParamsT* deviceParams,
-                                bool deviceInitialised) {
-    if (deviceParams == nullptr || deviceParams->rxChannelA == nullptr) {
-        std::cout << "Shutdown: Bias-T OFF request skipped; device params unavailable.\n";
-        return false;
+int runProbe() {
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+
+    std::string signalError;
+    if (!rsp1b::installStopSignalHandlers(signalError)) {
+        std::cerr << signalError << '\n';
+        return 1;
     }
 
-    deviceParams->rxChannelA->rsp1aTunerParams.biasTEnable = 0;
-    std::cout << "Shutdown: Bias-T requested OFF.\n";
-
-    if (!deviceInitialised) {
-        return true;
+    StreamStatistics statistics;
+    rsp1b::EventState events;
+    rsp1b::DeviceCallbackContext callbackContext;
+    callbackContext.events = &events;
+    callbackContext.streamContext = &statistics;
+    rsp1b::DeviceSession session(std::cout, std::cerr);
+    if (!session.connect() || !session.configure({})) {
+        return 1;
     }
 
-    return checkCall("sdrplay_api_Update(Rsp1a_BiasTControl)",
-                     sdrplay_api_Update(dev,
-                                        sdrplay_api_Tuner_A,
-                                        sdrplay_api_Update_Rsp1a_BiasTControl,
-                                        sdrplay_api_Update_Ext1_None));
+    if (!session.initialise(streamCallback, callbackContext)) {
+        return 1;
+    }
+
+    std::cout << "Streaming for about 1 second...\n";
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (std::chrono::steady_clock::now() < deadline &&
+           !events.stopRequested.load(std::memory_order_relaxed)) {
+        if (rsp1b::signalStopRequested()) {
+            events.stopRequested.store(true, std::memory_order_relaxed);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+
+    bool success = session.stopStreaming();
+    if (!session.shutdown()) {
+        success = false;
+    }
+    callbackContext.session = nullptr;
+    printStatistics(statistics);
+    std::cout << "Event statistics:\n"
+              << "  power_overload_events="
+              << events.powerOverloadEventCount.load(std::memory_order_relaxed) << '\n'
+              << "  power_overload_ack_failures="
+              << events.powerOverloadAcknowledgementFailures.load(std::memory_order_relaxed)
+              << '\n';
+
+    if (rsp1b::signalStopRequested()) {
+        std::cerr << "Probe interrupted; cleanup was attempted on the application thread.\n";
+        success = false;
+    }
+    if (events.deviceRemoved.load(std::memory_order_relaxed) ||
+        events.powerOverloadAcknowledgementFailures.load(std::memory_order_relaxed) != 0) {
+        success = false;
+    }
+    return success ? 0 : 1;
 }
 
 }  // namespace
 
 int main() {
-    std::cout << std::unitbuf;
-
-    bool apiOpen = false;
-    bool apiLocked = false;
-    bool deviceSelected = false;
-    bool deviceInitialised = false;
-    bool biasTShutdownRequested = false;
-    sdrplay_api_DeviceT chosenDevice{};
-    sdrplay_api_DeviceParamsT* deviceParams = nullptr;
-    int exitCode = 1;
-
-    auto cleanup = [&]() {
-        if (deviceSelected && !biasTShutdownRequested) {
-            biasTShutdownRequested =
-                requestBiasTOffForShutdown(chosenDevice.dev, deviceParams, deviceInitialised);
-        }
-        if (deviceInitialised) {
-            checkCall("sdrplay_api_Uninit", sdrplay_api_Uninit(chosenDevice.dev));
-            deviceInitialised = false;
-        }
-        if (deviceSelected) {
-            checkCall("sdrplay_api_ReleaseDevice", sdrplay_api_ReleaseDevice(&chosenDevice));
-            deviceSelected = false;
-        }
-        if (apiLocked) {
-            checkCall("sdrplay_api_UnlockDeviceApi", sdrplay_api_UnlockDeviceApi());
-            apiLocked = false;
-        }
-        if (apiOpen) {
-            checkCall("sdrplay_api_Close", sdrplay_api_Close());
-            apiOpen = false;
-        }
-    };
-
-    if (!checkCall("sdrplay_api_Open", sdrplay_api_Open())) {
-        return exitCode;
+    try {
+        return runProbe();
+    } catch (const std::exception& exception) {
+        std::cerr << "Probe failed: " << exception.what() << '\n';
+        return 1;
     }
-    apiOpen = true;
-
-    float apiVersion = 0.0F;
-    if (!checkCall("sdrplay_api_ApiVersion", sdrplay_api_ApiVersion(&apiVersion))) {
-        cleanup();
-        return exitCode;
-    }
-    std::cout << "SDRplay API version: " << apiVersion << '\n';
-
-    if (!checkCall("sdrplay_api_LockDeviceApi", sdrplay_api_LockDeviceApi())) {
-        cleanup();
-        return exitCode;
-    }
-    apiLocked = true;
-
-    std::array<sdrplay_api_DeviceT, SDRPLAY_MAX_DEVICES> devices{};
-    unsigned int numDevices = 0;
-    if (!checkCall("sdrplay_api_GetDevices",
-                   sdrplay_api_GetDevices(devices.data(), &numDevices, devices.size()))) {
-        cleanup();
-        return exitCode;
-    }
-
-    std::cout << "Detected devices: " << numDevices << '\n';
-    int selectedIndex = -1;
-    for (unsigned int i = 0; i < numDevices; ++i) {
-        printDevice(devices[i], i);
-        if (selectedIndex < 0 && devices[i].hwVer == SDRPLAY_RSP1B_ID && devices[i].valid != 0) {
-            selectedIndex = static_cast<int>(i);
-        }
-    }
-
-    if (selectedIndex < 0) {
-        std::cout << "No valid RSP1B found. Expected hwVer SDRPLAY_RSP1B_ID="
-                  << SDRPLAY_RSP1B_ID << ".\n";
-        cleanup();
-        return exitCode;
-    }
-
-    chosenDevice = devices[static_cast<std::size_t>(selectedIndex)];
-    std::cout << "Selected RSP1B:\n";
-    printDevice(chosenDevice, static_cast<unsigned int>(selectedIndex));
-
-    if (!checkCall("sdrplay_api_SelectDevice", sdrplay_api_SelectDevice(&chosenDevice))) {
-        cleanup();
-        return exitCode;
-    }
-    deviceSelected = true;
-
-    if (!checkCall("sdrplay_api_UnlockDeviceApi", sdrplay_api_UnlockDeviceApi())) {
-        cleanup();
-        return exitCode;
-    }
-    apiLocked = false;
-
-    if (!checkCall("sdrplay_api_GetDeviceParams",
-                   sdrplay_api_GetDeviceParams(chosenDevice.dev, &deviceParams))) {
-        cleanup();
-        return exitCode;
-    }
-
-    if (deviceParams == nullptr || deviceParams->devParams == nullptr ||
-        deviceParams->rxChannelA == nullptr) {
-        std::cout << "sdrplay_api_GetDeviceParams returned incomplete parameter pointers.\n";
-        cleanup();
-        return exitCode;
-    }
-
-    deviceParams->devParams->fsFreq.fsHz = 5000000.0;
-    deviceParams->rxChannelA->tunerParams.rfFreq.rfHz = 1575420000.0;
-    deviceParams->rxChannelA->tunerParams.ifType = sdrplay_api_IF_Zero;
-    deviceParams->rxChannelA->tunerParams.bwType = sdrplay_api_BW_5_000;
-    deviceParams->rxChannelA->rsp1aTunerParams.biasTEnable = 0;
-    deviceParams->devParams->rsp1aParams.rfNotchEnable = 0;
-    deviceParams->devParams->rsp1aParams.rfDabNotchEnable = 0;
-    deviceParams->rxChannelA->ctrlParams.agc.enable = sdrplay_api_AGC_50HZ;
-
-    std::cout << "Configured before Init:\n";
-    std::cout << "  fsHz=" << deviceParams->devParams->fsFreq.fsHz << '\n';
-    std::cout << "  rfHz=" << deviceParams->rxChannelA->tunerParams.rfFreq.rfHz << '\n';
-    std::cout << "  ifType=sdrplay_api_IF_Zero\n";
-    std::cout << "  bwType=sdrplay_api_BW_5_000\n";
-    std::cout << "  biasTEnable="
-              << static_cast<unsigned int>(deviceParams->rxChannelA->rsp1aTunerParams.biasTEnable)
-              << '\n';
-    std::cout << "  rfNotchEnable="
-              << static_cast<unsigned int>(deviceParams->devParams->rsp1aParams.rfNotchEnable)
-              << '\n';
-    std::cout << "  rfDabNotchEnable="
-              << static_cast<unsigned int>(deviceParams->devParams->rsp1aParams.rfDabNotchEnable)
-              << '\n';
-    std::cout << "  IF AGC enabled: sdrplay_api_AGC_50HZ\n";
-
-    StreamStats stats;
-    sdrplay_api_CallbackFnsT cbFns{};
-    cbFns.StreamACbFn = streamACallback;
-    cbFns.StreamBCbFn = nullptr;
-    cbFns.EventCbFn = eventCallback;
-
-    if (!checkCall("sdrplay_api_Init", sdrplay_api_Init(chosenDevice.dev, &cbFns, &stats))) {
-        cleanup();
-        return exitCode;
-    }
-    deviceInitialised = true;
-
-    std::cout << "Streaming for about 1 second...\n";
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-
-    biasTShutdownRequested =
-        requestBiasTOffForShutdown(chosenDevice.dev, deviceParams, deviceInitialised);
-    if (!biasTShutdownRequested) {
-        cleanup();
-        return exitCode;
-    }
-
-    if (!checkCall("sdrplay_api_Uninit", sdrplay_api_Uninit(chosenDevice.dev))) {
-        cleanup();
-        return exitCode;
-    }
-    deviceInitialised = false;
-
-    printStats(stats);
-
-    exitCode = 0;
-    cleanup();
-    return exitCode;
 }

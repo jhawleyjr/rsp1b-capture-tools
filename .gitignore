@@ -1,5 +1,37 @@
-build/
-captures/
-.DS_Store
+# Build output
+/build*/
+/out/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Testing/
+cmake_install.cmake
+compile_commands.json
+Makefile
 *.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
 *.dSYM/
+
+# Generated captures and test artifacts
+/captures/
+*.iq
+*.raw
+*.log
+
+# Editor, operating-system, and backup files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.save
+.idea/
+.vscode/

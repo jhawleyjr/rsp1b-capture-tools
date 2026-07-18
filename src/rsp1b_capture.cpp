@@ -1,502 +1,280 @@
-#include <sdrplay_api.h>
+#include "capture_options.hpp"
+#include "iq_writer.hpp"
+#include "metadata.hpp"
+#include "rsp1b_device.hpp"
+#include "signal_stop.hpp"
+#include "timestamp.hpp"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
-#include <ctime>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <mutex>
-#include <sstream>
+#include <limits>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
+static_assert(sizeof(short) == 2, "The SDRplay stream callback requires 16-bit short samples");
+
 namespace {
 
-constexpr double kDefaultCenterHz = 1575420000.0;
-constexpr double kDefaultSampleRateSps = 5000000.0;
-constexpr int kDefaultBiasT = 0;
-
-struct CaptureConfig {
-    double durationSeconds = 0.0;
-    double centerHz = kDefaultCenterHz;
-    double sampleRateSps = kDefaultSampleRateSps;
-    int biasT = kDefaultBiasT;
-    std::filesystem::path outPath;
-};
-
-struct CaptureContext {
-    std::ofstream iqFile;
-    std::mutex writeMutex;
+struct CaptureStreamState {
+    rsp1b::IqWriter* writer = nullptr;
     std::atomic<std::uint64_t> callbackCount{0};
-    std::atomic<std::uint64_t> samplesWritten{0};
     std::atomic<std::uint64_t> resetCount{0};
-    std::atomic<bool> writeFailed{false};
+    std::atomic<bool> callbackFailure{false};
 };
 
-const char* errorString(sdrplay_api_ErrT err) {
-    const char* text = sdrplay_api_GetErrorString(err);
-    return text != nullptr ? text : "(no error string)";
+std::uint64_t approximateExpectedSamples(const rsp1b::CaptureOptions& options) {
+    const long double expected = static_cast<long double>(options.durationSeconds) *
+                                 static_cast<long double>(options.sampleRateSps);
+    const long double maximum =
+        static_cast<long double>(std::numeric_limits<std::uint64_t>::max());
+    return expected >= maximum ? std::numeric_limits<std::uint64_t>::max()
+                               : static_cast<std::uint64_t>(expected);
 }
 
-bool checkCall(const char* name, sdrplay_api_ErrT err) {
-    std::cout << name << " -> " << static_cast<int>(err) << " ("
-              << errorString(err) << ")\n";
-    return err == sdrplay_api_Success;
-}
-
-void printUsage(const char* argv0) {
-    std::cout
-        << "Usage:\n"
-        << "  " << argv0 << " --duration SECONDS [--out captures/file.iq]\n"
-        << "              [--bias-t 0|1] [--center HZ] [--sample-rate SPS]\n";
-}
-
-bool parseDouble(const std::string& text, double* value) {
-    char* end = nullptr;
-    const double parsed = std::strtod(text.c_str(), &end);
-    if (end == text.c_str() || *end != '\0') {
-        return false;
-    }
-    *value = parsed;
-    return true;
-}
-
-bool parseInt(const std::string& text, int* value) {
-    char* end = nullptr;
-    const long parsed = std::strtol(text.c_str(), &end, 10);
-    if (end == text.c_str() || *end != '\0') {
-        return false;
-    }
-    *value = static_cast<int>(parsed);
-    return true;
-}
-
-std::string localTimestampForName() {
-    const std::time_t now = std::time(nullptr);
-    std::tm local{};
-    localtime_r(&now, &local);
-
-    char buffer[32]{};
-    std::strftime(buffer, sizeof(buffer), "%Y%m%d_%H%M%S", &local);
-    return buffer;
-}
-
-std::string localTimestampMetadata() {
-    const std::time_t now = std::time(nullptr);
-    std::tm local{};
-    localtime_r(&now, &local);
-
-    char buffer[64]{};
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S %Z", &local);
-    return buffer;
-}
-
-std::filesystem::path defaultOutputPath() {
-    return std::filesystem::path("captures") /
-           ("rsp1b_capture_" + localTimestampForName() + ".iq");
-}
-
-std::filesystem::path metadataPathFor(const std::filesystem::path& iqPath) {
-    std::filesystem::path metaPath = iqPath;
-    metaPath.replace_extension(".txt");
-    return metaPath;
-}
-
-bool parseArgs(int argc, char** argv, CaptureConfig* config) {
-    bool sawDuration = false;
-    config->outPath = defaultOutputPath();
-
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        auto needValue = [&](const char* name) -> const char* {
-            if (i + 1 >= argc) {
-                std::cout << "Missing value for " << name << ".\n";
-                return nullptr;
-            }
-            return argv[++i];
-        };
-
-        if (arg == "--help" || arg == "-h") {
-            printUsage(argv[0]);
-            return false;
-        }
-        if (arg == "--duration") {
-            const char* value = needValue("--duration");
-            if (value == nullptr || !parseDouble(value, &config->durationSeconds)) {
-                std::cout << "Invalid --duration value.\n";
-                return false;
-            }
-            sawDuration = true;
-        } else if (arg == "--out") {
-            const char* value = needValue("--out");
-            if (value == nullptr) {
-                return false;
-            }
-            config->outPath = value;
-        } else if (arg == "--bias-t") {
-            const char* value = needValue("--bias-t");
-            if (value == nullptr || !parseInt(value, &config->biasT) ||
-                (config->biasT != 0 && config->biasT != 1)) {
-                std::cout << "Invalid --bias-t value; use 0 or 1.\n";
-                return false;
-            }
-        } else if (arg == "--center") {
-            const char* value = needValue("--center");
-            if (value == nullptr || !parseDouble(value, &config->centerHz)) {
-                std::cout << "Invalid --center value.\n";
-                return false;
-            }
-        } else if (arg == "--sample-rate") {
-            const char* value = needValue("--sample-rate");
-            if (value == nullptr || !parseDouble(value, &config->sampleRateSps)) {
-                std::cout << "Invalid --sample-rate value.\n";
-                return false;
-            }
-        } else {
-            std::cout << "Unknown argument: " << arg << '\n';
-            printUsage(argv[0]);
-            return false;
-        }
-    }
-
-    if (!sawDuration || config->durationSeconds <= 0.0) {
-        std::cout << "--duration is required and must be greater than zero.\n";
-        printUsage(argv[0]);
-        return false;
-    }
-
-    if (config->sampleRateSps <= 0.0) {
-        std::cout << "--sample-rate must be greater than zero.\n";
-        return false;
-    }
-
-    return true;
-}
-
-void printDevice(const sdrplay_api_DeviceT& device, unsigned int index) {
-    std::cout << "Device[" << index << "]"
-              << " SerNo=" << device.SerNo
-              << " hwVer=" << static_cast<unsigned int>(device.hwVer)
-              << " tuner=" << static_cast<int>(device.tuner)
-              << " valid=" << static_cast<unsigned int>(device.valid)
-              << " dev=" << device.dev << '\n';
-}
-
-void streamACallback(short* xi,
-                     short* xq,
-                     sdrplay_api_StreamCbParamsT*,
-                     unsigned int numSamples,
-                     unsigned int reset,
-                     void* cbContext) {
-    auto* capture = static_cast<CaptureContext*>(cbContext);
-    if (capture == nullptr || capture->writeFailed.load(std::memory_order_relaxed)) {
+void streamCallback(short* xi,
+                    short* xq,
+                    sdrplay_api_StreamCbParamsT*,
+                    unsigned int sampleCount,
+                    unsigned int reset,
+                    void* callbackContext) {
+    auto* deviceContext = static_cast<rsp1b::DeviceCallbackContext*>(callbackContext);
+    if (deviceContext == nullptr || deviceContext->events == nullptr ||
+        deviceContext->streamContext == nullptr) {
         return;
     }
 
-    std::vector<short> interleaved;
-    interleaved.resize(static_cast<std::size_t>(numSamples) * 2U);
-    for (unsigned int i = 0; i < numSamples; ++i) {
-        const std::size_t outIndex = static_cast<std::size_t>(i) * 2U;
-        interleaved[outIndex] = xi[i];
-        interleaved[outIndex + 1U] = xq[i];
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(capture->writeMutex);
-        capture->iqFile.write(reinterpret_cast<const char*>(interleaved.data()),
-                              static_cast<std::streamsize>(interleaved.size() * sizeof(short)));
-        if (!capture->iqFile) {
-            capture->writeFailed.store(true, std::memory_order_relaxed);
-            return;
-        }
-    }
-
+    auto* capture = static_cast<CaptureStreamState*>(deviceContext->streamContext);
     capture->callbackCount.fetch_add(1, std::memory_order_relaxed);
-    capture->samplesWritten.fetch_add(numSamples, std::memory_order_relaxed);
     if (reset != 0) {
         capture->resetCount.fetch_add(1, std::memory_order_relaxed);
     }
+    if (capture->writer == nullptr || (sampleCount != 0 && (xi == nullptr || xq == nullptr))) {
+        capture->callbackFailure.store(true, std::memory_order_relaxed);
+        deviceContext->events->stopRequested.store(true, std::memory_order_relaxed);
+        return;
+    }
+
+    try {
+        rsp1b::IqBlock block(static_cast<std::size_t>(sampleCount) * 2U);
+        for (unsigned int index = 0; index < sampleCount; ++index) {
+            const std::size_t outputIndex = static_cast<std::size_t>(index) * 2U;
+            block[outputIndex] = static_cast<std::int16_t>(xi[index]);
+            block[outputIndex + 1U] = static_cast<std::int16_t>(xq[index]);
+        }
+
+        const rsp1b::EnqueueResult result = capture->writer->enqueue(std::move(block));
+        if (result != rsp1b::EnqueueResult::accepted) {
+            deviceContext->events->stopRequested.store(true, std::memory_order_relaxed);
+        }
+    } catch (...) {
+        capture->callbackFailure.store(true, std::memory_order_relaxed);
+        deviceContext->events->stopRequested.store(true, std::memory_order_relaxed);
+    }
 }
 
-void eventCallback(sdrplay_api_EventT eventId,
-                   sdrplay_api_TunerSelectT tuner,
-                   sdrplay_api_EventParamsT*,
-                   void*) {
-    std::cout << "Event callback: eventId=" << static_cast<int>(eventId)
-              << " tuner=" << static_cast<int>(tuner) << '\n';
-}
-
-bool writeMetadata(const std::filesystem::path& path,
-                   const CaptureConfig& config,
-                   const sdrplay_api_DeviceT& device,
-                   std::uint64_t samplesWritten) {
-    std::ofstream meta(path);
-    if (!meta) {
-        std::cout << "Failed to open metadata output: " << path << '\n';
+bool createOutputDirectory(const std::filesystem::path& outputPath, std::string& error) {
+    const std::filesystem::path directory =
+        outputPath.parent_path().empty() ? std::filesystem::path(".") : outputPath.parent_path();
+    std::error_code filesystemError;
+    std::filesystem::create_directories(directory, filesystemError);
+    if (filesystemError) {
+        error = "Unable to create output directory '" + directory.string() + "': " +
+                filesystemError.message();
         return false;
     }
-
-    meta << "receiver = SDRplay RSP1B\n";
-    meta << "serial = " << device.SerNo << '\n';
-    meta << "center_frequency_hz = " << static_cast<std::uint64_t>(config.centerHz) << '\n';
-    meta << "sample_rate_sps = " << static_cast<std::uint64_t>(config.sampleRateSps) << '\n';
-    meta << "bandwidth = 5 MHz\n";
-    meta << "if_type = zero IF\n";
-    meta << "bias_t = " << config.biasT << '\n';
-    meta << "rf_notch = 0\n";
-    meta << "dab_notch = 0\n";
-    meta << "if_agc = sdrplay_api_AGC_50HZ\n";
-    meta << "duration_seconds_requested = " << config.durationSeconds << '\n';
-    meta << "total_complex_samples_written = " << samplesWritten << '\n';
-    meta << "output_format = interleaved_int16_iq\n";
-    meta << "byte_order = little_endian\n";
-    meta << "timestamp_local = " << localTimestampMetadata() << '\n';
-    return static_cast<bool>(meta);
+    return true;
 }
 
-bool requestBiasTOffForShutdown(HANDLE dev,
-                                sdrplay_api_DeviceParamsT* deviceParams,
-                                bool deviceInitialised) {
-    if (deviceParams == nullptr || deviceParams->rxChannelA == nullptr) {
-        std::cout << "Shutdown: Bias-T OFF request skipped; device params unavailable.\n";
-        return false;
+void removeEmptyCapture(const std::filesystem::path& outputPath) {
+    std::error_code filesystemError;
+    if (std::filesystem::file_size(outputPath, filesystemError) == 0 && !filesystemError) {
+        std::filesystem::remove(outputPath, filesystemError);
+    }
+}
+
+int runCapture(int argc, char** argv) {
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+
+    std::vector<std::string> arguments;
+    arguments.reserve(static_cast<std::size_t>(argc));
+    for (int index = 0; index < argc; ++index) {
+        arguments.emplace_back(argv[index]);
     }
 
-    deviceParams->rxChannelA->rsp1aTunerParams.biasTEnable = 0;
-    std::cout << "Shutdown: Bias-T requested OFF.\n";
+    const rsp1b::ParseOutcome parsed = rsp1b::parseCaptureOptions(arguments);
+    if (parsed.result == rsp1b::ParseResult::help) {
+        std::cout << parsed.message;
+        return 0;
+    }
+    if (parsed.result == rsp1b::ParseResult::error) {
+        std::cerr << parsed.message << rsp1b::captureUsage(arguments.front());
+        return 2;
+    }
+    const rsp1b::CaptureOptions& options = parsed.options;
 
-    if (!deviceInitialised) {
-        return true;
+    std::string signalError;
+    if (!rsp1b::installStopSignalHandlers(signalError)) {
+        std::cerr << signalError << '\n';
+        return 1;
     }
 
-    return checkCall("sdrplay_api_Update(Rsp1a_BiasTControl)",
-                     sdrplay_api_Update(dev,
-                                        sdrplay_api_Tuner_A,
-                                        sdrplay_api_Update_Rsp1a_BiasTControl,
-                                        sdrplay_api_Update_Ext1_None));
+    if (options.biasT == 1) {
+        std::cerr << "WARNING: --bias-t 1 enables antenna DC power. Confirm the connected "
+                     "hardware is Bias-T safe before continuing.\n";
+    } else {
+        std::cout << "Bias-T is OFF. Use --bias-t 1 only when antenna DC power is required.\n";
+    }
+
+    std::string filesystemError;
+    if (!createOutputDirectory(options.outputPath, filesystemError)) {
+        std::cerr << filesystemError << '\n';
+        return 1;
+    }
+
+    std::unique_ptr<rsp1b::IqWriter> writer;
+    rsp1b::EventState events;
+    CaptureStreamState capture;
+    rsp1b::DeviceCallbackContext callbackContext;
+    callbackContext.events = &events;
+    callbackContext.streamContext = &capture;
+    rsp1b::DeviceSession session(std::cout, std::cerr);
+    if (!session.connect() ||
+        !session.configure({options.centerHz, options.sampleRateSps, options.biasT})) {
+        return 1;
+    }
+
+    std::string writerError;
+    writer = rsp1b::IqWriter::openFile(
+        options.outputPath, rsp1b::kDefaultMaxQueuedBlocks, &events.stopRequested, writerError);
+    if (writer == nullptr) {
+        std::cerr << writerError << '\n';
+        return 1;
+    }
+    capture.writer = writer.get();
+    if (!session.initialise(streamCallback, callbackContext)) {
+        writer->finish();
+        removeEmptyCapture(options.outputPath);
+        return 1;
+    }
+
+    std::cout << "Writing IQ to " << options.outputPath << '\n'
+              << "Streaming for " << options.durationSeconds << " seconds...\n";
+    const auto start = std::chrono::steady_clock::now();
+    const auto requestedDuration = std::chrono::duration<double>(options.durationSeconds);
+    bool interrupted = false;
+    while (std::chrono::steady_clock::now() - start < requestedDuration &&
+           !events.stopRequested.load(std::memory_order_relaxed)) {
+        if (rsp1b::signalStopRequested()) {
+            interrupted = true;
+            events.stopRequested.store(true, std::memory_order_relaxed);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    if (rsp1b::signalStopRequested()) {
+        interrupted = true;
+    }
+
+    const std::string serialNumber = session.device().SerNo;
+    bool success = session.stopStreaming();
+    if (!session.shutdown()) {
+        success = false;
+    }
+    callbackContext.session = nullptr;
+    capture.writer = nullptr;
+    if (!writer->finish()) {
+        success = false;
+    }
+
+    const rsp1b::WriterStatistics writerStatistics = writer->statistics();
+    rsp1b::CaptureStatistics statistics;
+    statistics.callbacksReceived = capture.callbackCount.load(std::memory_order_relaxed);
+    statistics.samplesAccepted = writerStatistics.samplesAccepted;
+    statistics.samplesWritten = writerStatistics.samplesWritten;
+    statistics.resetCount = capture.resetCount.load(std::memory_order_relaxed);
+    statistics.queueOverflowCount = writerStatistics.queueOverflowCount;
+    statistics.droppedBlockCount = writerStatistics.droppedBlockCount;
+    statistics.writerFailure = writerStatistics.writerFailure;
+    statistics.interrupted = interrupted;
+    statistics.deviceRemoved = events.deviceRemoved.load(std::memory_order_relaxed);
+    statistics.overloadEventCount =
+        events.powerOverloadEventCount.load(std::memory_order_relaxed);
+    statistics.overloadAcknowledgementFailures =
+        events.powerOverloadAcknowledgementFailures.load(std::memory_order_relaxed);
+
+    std::cout << "Capture statistics:\n"
+              << "  callbacks_received=" << statistics.callbacksReceived << '\n'
+              << "  samples_accepted=" << statistics.samplesAccepted << '\n'
+              << "  samples_written=" << statistics.samplesWritten << '\n'
+              << "  resets=" << statistics.resetCount << '\n'
+              << "  queue_overflows=" << statistics.queueOverflowCount << '\n'
+              << "  dropped_blocks=" << statistics.droppedBlockCount << '\n'
+              << "  writer_failure=" << (statistics.writerFailure ? 1 : 0) << '\n'
+              << "  interrupted=" << (statistics.interrupted ? 1 : 0) << '\n'
+              << "  expected_samples_approx=" << approximateExpectedSamples(options) << '\n';
+
+    if (capture.callbackFailure.load(std::memory_order_relaxed)) {
+        std::cerr << "The stream callback encountered invalid input or could not allocate an IQ block.\n";
+        success = false;
+    }
+    if (statistics.queueOverflowCount != 0) {
+        std::cerr << "Capture stopped because the bounded IQ writer queue overflowed.\n";
+        success = false;
+    }
+    if (statistics.writerFailure) {
+        std::cerr << writer->failureMessage() << '\n';
+        success = false;
+    }
+    if (statistics.interrupted) {
+        std::cerr << "Capture interrupted; partial data was drained and normal-thread cleanup was "
+                     "attempted.\n";
+        success = false;
+    }
+    if (statistics.deviceRemoved) {
+        success = false;
+    }
+    if (statistics.overloadAcknowledgementFailures != 0) {
+        std::cerr << "One or more power-overload acknowledgements failed.\n";
+        success = false;
+    }
+
+    std::string timestamp = rsp1b::localTimestampMetadata();
+    if (timestamp.empty()) {
+        std::cerr << "Unable to format the metadata timestamp.\n";
+        timestamp = "unavailable";
+        success = false;
+    }
+
+    rsp1b::MetadataRecord metadata;
+    metadata.options = options;
+    metadata.statistics = statistics;
+    metadata.serialNumber = serialNumber;
+    metadata.timestampLocal = timestamp;
+    const std::filesystem::path metadataPath = rsp1b::metadataPathFor(options.outputPath);
+    std::string metadataError;
+    if (!rsp1b::writeMetadataFile(metadataPath, metadata, metadataError)) {
+        std::cerr << metadataError << '\n';
+        success = false;
+    } else {
+        std::cout << "Wrote metadata to " << metadataPath << '\n';
+    }
+
+    return success ? 0 : 1;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::cout << std::unitbuf;
-
-    CaptureConfig config;
-    if (!parseArgs(argc, argv, &config)) {
+    try {
+        return runCapture(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "Capture failed: " << exception.what() << '\n';
         return 1;
     }
-
-    if (config.biasT == 1) {
-        std::cout << "WARNING: Bias-T was explicitly requested with --bias-t 1. "
-                  << "This will enable antenna DC power.\n";
-    } else {
-        std::cout << "Bias-T is OFF. Use --bias-t 1 only when DC power is required.\n";
-    }
-
-    std::filesystem::create_directories(config.outPath.parent_path().empty()
-                                            ? std::filesystem::path(".")
-                                            : config.outPath.parent_path());
-    const std::filesystem::path metaPath = metadataPathFor(config.outPath);
-
-    CaptureContext capture;
-    capture.iqFile.open(config.outPath, std::ios::binary | std::ios::trunc);
-    if (!capture.iqFile) {
-        std::cout << "Failed to open IQ output: " << config.outPath << '\n';
-        return 1;
-    }
-
-    bool apiOpen = false;
-    bool apiLocked = false;
-    bool deviceSelected = false;
-    bool deviceInitialised = false;
-    bool biasTShutdownRequested = false;
-    sdrplay_api_DeviceT chosenDevice{};
-    sdrplay_api_DeviceParamsT* deviceParams = nullptr;
-    int exitCode = 1;
-
-    auto cleanup = [&]() {
-        if (deviceSelected && !biasTShutdownRequested) {
-            biasTShutdownRequested =
-                requestBiasTOffForShutdown(chosenDevice.dev, deviceParams, deviceInitialised);
-        }
-        if (deviceInitialised) {
-            checkCall("sdrplay_api_Uninit", sdrplay_api_Uninit(chosenDevice.dev));
-            deviceInitialised = false;
-        }
-        if (deviceSelected) {
-            checkCall("sdrplay_api_ReleaseDevice", sdrplay_api_ReleaseDevice(&chosenDevice));
-            deviceSelected = false;
-        }
-        if (apiLocked) {
-            checkCall("sdrplay_api_UnlockDeviceApi", sdrplay_api_UnlockDeviceApi());
-            apiLocked = false;
-        }
-        if (apiOpen) {
-            checkCall("sdrplay_api_Close", sdrplay_api_Close());
-            apiOpen = false;
-        }
-    };
-
-    if (!checkCall("sdrplay_api_Open", sdrplay_api_Open())) {
-        return exitCode;
-    }
-    apiOpen = true;
-
-    float apiVersion = 0.0F;
-    if (!checkCall("sdrplay_api_ApiVersion", sdrplay_api_ApiVersion(&apiVersion))) {
-        cleanup();
-        return exitCode;
-    }
-    std::cout << "SDRplay API version: " << apiVersion << '\n';
-
-    if (!checkCall("sdrplay_api_LockDeviceApi", sdrplay_api_LockDeviceApi())) {
-        cleanup();
-        return exitCode;
-    }
-    apiLocked = true;
-
-    std::array<sdrplay_api_DeviceT, SDRPLAY_MAX_DEVICES> devices{};
-    unsigned int numDevices = 0;
-    if (!checkCall("sdrplay_api_GetDevices",
-                   sdrplay_api_GetDevices(devices.data(), &numDevices, devices.size()))) {
-        cleanup();
-        return exitCode;
-    }
-
-    std::cout << "Detected devices: " << numDevices << '\n';
-    int selectedIndex = -1;
-    for (unsigned int i = 0; i < numDevices; ++i) {
-        printDevice(devices[i], i);
-        if (selectedIndex < 0 && devices[i].hwVer == SDRPLAY_RSP1B_ID && devices[i].valid != 0) {
-            selectedIndex = static_cast<int>(i);
-        }
-    }
-
-    if (selectedIndex < 0) {
-        std::cout << "No valid RSP1B found. Expected hwVer SDRPLAY_RSP1B_ID="
-                  << SDRPLAY_RSP1B_ID << ".\n";
-        cleanup();
-        return exitCode;
-    }
-
-    chosenDevice = devices[static_cast<std::size_t>(selectedIndex)];
-    std::cout << "Selected RSP1B:\n";
-    printDevice(chosenDevice, static_cast<unsigned int>(selectedIndex));
-
-    if (!checkCall("sdrplay_api_SelectDevice", sdrplay_api_SelectDevice(&chosenDevice))) {
-        cleanup();
-        return exitCode;
-    }
-    deviceSelected = true;
-
-    if (!checkCall("sdrplay_api_UnlockDeviceApi", sdrplay_api_UnlockDeviceApi())) {
-        cleanup();
-        return exitCode;
-    }
-    apiLocked = false;
-
-    if (!checkCall("sdrplay_api_GetDeviceParams",
-                   sdrplay_api_GetDeviceParams(chosenDevice.dev, &deviceParams))) {
-        cleanup();
-        return exitCode;
-    }
-
-    if (deviceParams == nullptr || deviceParams->devParams == nullptr ||
-        deviceParams->rxChannelA == nullptr) {
-        std::cout << "sdrplay_api_GetDeviceParams returned incomplete parameter pointers.\n";
-        cleanup();
-        return exitCode;
-    }
-
-    deviceParams->devParams->fsFreq.fsHz = config.sampleRateSps;
-    deviceParams->rxChannelA->tunerParams.rfFreq.rfHz = config.centerHz;
-    deviceParams->rxChannelA->tunerParams.ifType = sdrplay_api_IF_Zero;
-    deviceParams->rxChannelA->tunerParams.bwType = sdrplay_api_BW_5_000;
-    deviceParams->rxChannelA->rsp1aTunerParams.biasTEnable =
-        static_cast<unsigned char>(config.biasT);
-    deviceParams->devParams->rsp1aParams.rfNotchEnable = 0;
-    deviceParams->devParams->rsp1aParams.rfDabNotchEnable = 0;
-    deviceParams->rxChannelA->ctrlParams.agc.enable = sdrplay_api_AGC_50HZ;
-
-    std::cout << "Configured before Init:\n";
-    std::cout << "  fsHz=" << deviceParams->devParams->fsFreq.fsHz << '\n';
-    std::cout << "  rfHz=" << deviceParams->rxChannelA->tunerParams.rfFreq.rfHz << '\n';
-    std::cout << "  ifType=sdrplay_api_IF_Zero\n";
-    std::cout << "  bwType=sdrplay_api_BW_5_000\n";
-    std::cout << "  biasTEnable="
-              << static_cast<unsigned int>(deviceParams->rxChannelA->rsp1aTunerParams.biasTEnable)
-              << '\n';
-    std::cout << "  rfNotchEnable="
-              << static_cast<unsigned int>(deviceParams->devParams->rsp1aParams.rfNotchEnable)
-              << '\n';
-    std::cout << "  rfDabNotchEnable="
-              << static_cast<unsigned int>(deviceParams->devParams->rsp1aParams.rfDabNotchEnable)
-              << '\n';
-    std::cout << "  IF AGC enabled: sdrplay_api_AGC_50HZ\n";
-
-    sdrplay_api_CallbackFnsT cbFns{};
-    cbFns.StreamACbFn = streamACallback;
-    cbFns.StreamBCbFn = nullptr;
-    cbFns.EventCbFn = eventCallback;
-
-    if (!checkCall("sdrplay_api_Init", sdrplay_api_Init(chosenDevice.dev, &cbFns, &capture))) {
-        cleanup();
-        return exitCode;
-    }
-    deviceInitialised = true;
-
-    std::cout << "Writing IQ to " << config.outPath << '\n';
-    std::cout << "Streaming for " << config.durationSeconds << " seconds...\n";
-    std::this_thread::sleep_for(std::chrono::duration<double>(config.durationSeconds));
-
-    biasTShutdownRequested =
-        requestBiasTOffForShutdown(chosenDevice.dev, deviceParams, deviceInitialised);
-    if (!biasTShutdownRequested) {
-        cleanup();
-        return exitCode;
-    }
-
-    if (!checkCall("sdrplay_api_Uninit", sdrplay_api_Uninit(chosenDevice.dev))) {
-        cleanup();
-        return exitCode;
-    }
-    deviceInitialised = false;
-
-    {
-        std::lock_guard<std::mutex> lock(capture.writeMutex);
-        capture.iqFile.flush();
-        capture.iqFile.close();
-    }
-
-    const std::uint64_t samplesWritten =
-        capture.samplesWritten.load(std::memory_order_relaxed);
-    std::cout << "Capture stats:\n";
-    std::cout << "  callbacks=" << capture.callbackCount.load(std::memory_order_relaxed) << '\n';
-    std::cout << "  total_complex_samples_written=" << samplesWritten << '\n';
-    std::cout << "  resets=" << capture.resetCount.load(std::memory_order_relaxed) << '\n';
-
-    const double expectedSamples = config.durationSeconds * config.sampleRateSps;
-    std::cout << "  expected_samples_approx=" << static_cast<std::uint64_t>(expectedSamples)
-              << '\n';
-
-    if (capture.writeFailed.load(std::memory_order_relaxed)) {
-        std::cout << "IQ write failed during streaming.\n";
-        cleanup();
-        return exitCode;
-    }
-
-    if (!writeMetadata(metaPath, config, chosenDevice, samplesWritten)) {
-        cleanup();
-        return exitCode;
-    }
-    std::cout << "Wrote metadata to " << metaPath << '\n';
-
-    exitCode = 0;
-    cleanup();
-    return exitCode;
 }

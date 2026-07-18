@@ -1,0 +1,51 @@
+name: Portable CI
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-tests:
+    name: Portable tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Configure SDK-independent build
+        run: cmake -S . -B build-ci -DRSP1B_BUILD_TOOLS=OFF -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-ci --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build-ci -C Release --output-on-failure
+
+  ci-success:
+    name: CI success
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ always() }}
+    needs:
+      - portable-tests
+    steps:
+      - name: Confirm complete matrix passed
+        if: ${{ needs.portable-tests.result != 'success' }}
+        run: exit 1
+
+      - name: Report success
+        run: echo "All portable CI jobs passed."
