@@ -20,6 +20,9 @@ All notable changes to this project will be documented in this file. The format 
 - Improved argument validation, shutdown handling, metadata, and portable builds.
 - Prevented startup signals observed before initialization from starting the receiver.
 - Counted accepted queued blocks discarded after writer failure as dropped blocks.
+- Counted enqueue attempts rejected after writer failure as dropped blocks.
+- Kept `.txt` IQ recordings distinct from companion metadata and rejected non-regular or symbolic
+  link output targets even when replacement is authorized.
 - Improved architecture-aware Windows SDK discovery and documented explicit CMake overrides.
 
 ## [0.1.0] - Unreleased

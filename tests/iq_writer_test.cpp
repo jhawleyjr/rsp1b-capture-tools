@@ -130,6 +130,28 @@ std::string readText(const std::filesystem::path& path) {
     return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 }
 
+bool hasRollbackBackup(const std::filesystem::path& directory) {
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        if (entry.path().filename().string().find(".rsp1b-backup") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool waitForWriterFailure(const rsp1b::IqWriter& writer,
+                          const std::atomic<bool>& stopRequested) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (stopRequested.load(std::memory_order_relaxed) ||
+            writer.statistics().writerFailure) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
 void testOrderingAndDrain() {
     TemporaryDirectory temporaryDirectory;
     const auto outputPath = temporaryDirectory.path() / "ordered.iq";
@@ -184,6 +206,32 @@ void testQueuedBlocksCountedAfterWriteFailure() {
     CHECK(statistics.samplesAccepted == 4);
     CHECK(statistics.samplesWritten == 0);
     CHECK(stopRequested.load());
+}
+
+void testEnqueueRejectedAfterWriteFailureIsCounted() {
+    BlockingFailingStreamBuffer buffer;
+    auto output = std::make_unique<std::ostream>(&buffer);
+    std::atomic<bool> stopRequested{false};
+    rsp1b::IqWriter writer(std::move(output), 2, &stopRequested);
+
+    CHECK(writer.enqueue({1, 2}) == rsp1b::EnqueueResult::accepted);
+    buffer.waitUntilWriting();
+    buffer.releaseFailure();
+    CHECK(waitForWriterFailure(writer, stopRequested));
+
+    const auto beforeRejectedEnqueue = writer.statistics();
+    CHECK(beforeRejectedEnqueue.writerFailure);
+    CHECK(writer.enqueue({3, 4, 5, 6}) == rsp1b::EnqueueResult::writerFailed);
+    const auto afterRejectedEnqueue = writer.statistics();
+    CHECK(afterRejectedEnqueue.droppedBlockCount ==
+          beforeRejectedEnqueue.droppedBlockCount + 1);
+    CHECK(afterRejectedEnqueue.samplesAccepted == beforeRejectedEnqueue.samplesAccepted);
+
+    CHECK(!writer.finish());
+    CHECK(!writer.finish());
+    const auto afterRepeatedFinish = writer.statistics();
+    CHECK(afterRepeatedFinish.droppedBlockCount == afterRejectedEnqueue.droppedBlockCount);
+    CHECK(afterRepeatedFinish.samplesAccepted == afterRejectedEnqueue.samplesAccepted);
 }
 
 void testQueueOverflow() {
@@ -244,6 +292,65 @@ void testFileOverwriteProtection() {
     CHECK(readSamples(newPath) == std::vector<std::int16_t>({9, 10}));
 }
 
+void testDirectoryOutputRejection() {
+    TemporaryDirectory temporaryDirectory;
+    const auto directoryPath = temporaryDirectory.path() / "existing.iq";
+    std::filesystem::create_directory(directoryPath);
+    const auto childPath = directoryPath / "keep.txt";
+    {
+        std::ofstream child(childPath);
+        child << "directory contents";
+    }
+
+    for (const bool overwriteAuthorized : {false, true}) {
+        std::string error;
+        auto writer = rsp1b::IqWriter::openFile(
+            directoryPath, overwriteAuthorized, 2, nullptr, error);
+        CHECK(writer == nullptr);
+        CHECK_CONTAINS(error, "not a regular file");
+        CHECK(std::filesystem::is_directory(directoryPath));
+        CHECK(readText(childPath) == "directory contents");
+        CHECK(!hasRollbackBackup(temporaryDirectory.path()));
+    }
+
+    std::string rollbackError;
+    rsp1b::ExistingFileRollback rollback;
+    CHECK(!rollback.preserve(directoryPath, true, rollbackError));
+    CHECK_CONTAINS(rollbackError, "not a regular file");
+    CHECK(!rollback.active());
+    CHECK(std::filesystem::is_directory(directoryPath));
+    CHECK(readText(childPath) == "directory contents");
+    CHECK(!hasRollbackBackup(temporaryDirectory.path()));
+}
+
+void testSymbolicLinkOutputRejection() {
+    TemporaryDirectory temporaryDirectory;
+    const auto targetPath = temporaryDirectory.path() / "target.iq";
+    const auto linkPath = temporaryDirectory.path() / "linked.iq";
+    {
+        std::ofstream target(targetPath);
+        target << "linked sentinel";
+    }
+
+    std::error_code symlinkError;
+    std::filesystem::create_symlink(targetPath, linkPath, symlinkError);
+    if (symlinkError) {
+        return;
+    }
+
+    std::string error;
+    auto writer = rsp1b::IqWriter::openFile(linkPath, true, 2, nullptr, error);
+    CHECK(writer == nullptr);
+    CHECK_CONTAINS(error, "symbolic link");
+    CHECK(readText(targetPath) == "linked sentinel");
+
+    rsp1b::ExistingFileRollback rollback;
+    CHECK(!rollback.preserve(linkPath, true, error));
+    CHECK_CONTAINS(error, "symbolic link");
+    CHECK(!rollback.active());
+    CHECK(!hasRollbackBackup(temporaryDirectory.path()));
+}
+
 void testForcedOutputRollbackBeforeInitialization() {
     TemporaryDirectory temporaryDirectory;
     const auto outputPath = temporaryDirectory.path() / "preserved.iq";
@@ -281,9 +388,12 @@ int main() {
     testOrderingAndDrain();
     testWriteFailure();
     testQueuedBlocksCountedAfterWriteFailure();
+    testEnqueueRejectedAfterWriteFailureIsCounted();
     testQueueOverflow();
     testEmptyStop();
     testFileOverwriteProtection();
+    testDirectoryOutputRejection();
+    testSymbolicLinkOutputRejection();
     testForcedOutputRollbackBeforeInitialization();
     return test_support::failures == 0 ? 0 : 1;
 }

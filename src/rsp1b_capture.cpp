@@ -154,6 +154,10 @@ int runCapture(int argc, char** argv) {
         std::cerr << filesystemError << '\n';
         return 1;
     }
+    if (!rsp1b::validateDistinctOutputPaths(options.outputPath, metadataPath, filesystemError)) {
+        std::cerr << filesystemError << '\n';
+        return 1;
+    }
     if (!createOutputDirectory(options.outputPath, filesystemError)) {
         std::cerr << filesystemError << '\n';
         return 1;

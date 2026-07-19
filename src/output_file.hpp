@@ -11,6 +11,10 @@ bool checkOutputPath(const std::filesystem::path& path,
                      bool& pathExisted,
                      std::string& error);
 
+bool validateDistinctOutputPaths(const std::filesystem::path& iqPath,
+                                 const std::filesystem::path& metadataPath,
+                                 std::string& error);
+
 class ExistingFileRollback {
 public:
     ExistingFileRollback() = default;

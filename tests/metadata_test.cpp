@@ -1,5 +1,6 @@
 #include "metadata.hpp"
 
+#include "output_file.hpp"
 #include "test_support.hpp"
 #include "timestamp.hpp"
 
@@ -87,8 +88,29 @@ void testMetadataContent() {
 }
 
 void testPathsAndTimestamp() {
-    CHECK(rsp1b::metadataPathFor("captures/example.iq") == "captures/example.txt");
-    CHECK(rsp1b::metadataPathFor("captures/example.raw") == "captures/example.txt");
+    const std::filesystem::path iqPath = "captures/example.iq";
+    const std::filesystem::path rawPath = "captures/example.raw";
+    const std::filesystem::path txtPath = "captures/example.txt";
+    const std::filesystem::path upperTxtPath = "captures/example.TXT";
+    CHECK(rsp1b::metadataPathFor(iqPath) == "captures/example.txt");
+    CHECK(rsp1b::metadataPathFor(rawPath) == "captures/example.txt");
+    CHECK(rsp1b::metadataPathFor(txtPath) == "captures/example.txt.metadata.txt");
+    CHECK(rsp1b::metadataPathFor(upperTxtPath) == "captures/example.TXT.metadata.txt");
+    CHECK(rsp1b::metadataPathFor(txtPath) != txtPath);
+    CHECK(rsp1b::metadataPathFor(upperTxtPath) != upperTxtPath);
+
+    std::string error;
+    CHECK(rsp1b::validateDistinctOutputPaths(
+        txtPath, rsp1b::metadataPathFor(txtPath), error));
+    CHECK(rsp1b::validateDistinctOutputPaths(
+        upperTxtPath, rsp1b::metadataPathFor(upperTxtPath), error));
+    CHECK(!rsp1b::validateDistinctOutputPaths(txtPath, txtPath, error));
+    CHECK_CONTAINS(error, "--force cannot authorize metadata");
+#if defined(_WIN32) || defined(__APPLE__)
+    CHECK(!rsp1b::validateDistinctOutputPaths(
+        "captures/case-sensitive-name.iq", "captures/CASE-SENSITIVE-NAME.IQ", error));
+    CHECK_CONTAINS(error, "resolve to the same path");
+#endif
     CHECK(!rsp1b::formatLocalTimestamp(std::time(nullptr), "%Y%m%d_%H%M%S").empty());
 }
 
@@ -113,11 +135,77 @@ void testMetadataOverwriteProtection() {
     CHECK_CONTAINS(readText(metadataPath), "receiver = SDRplay RSP1B");
 }
 
+void testTxtIqCompanionSafety() {
+    TemporaryDirectory temporaryDirectory;
+    const auto iqPath = temporaryDirectory.path() / "capture.txt";
+    const auto metadataPath = rsp1b::metadataPathFor(iqPath);
+    {
+        std::ofstream iqSentinel(iqPath);
+        iqSentinel << "sentinel IQ data";
+        std::ofstream metadataSentinel(metadataPath);
+        metadataSentinel << "old metadata";
+    }
+
+    rsp1b::MetadataRecord record;
+    record.options.durationSeconds = 1.0;
+    record.options.outputPath = iqPath;
+    std::string error;
+    CHECK(rsp1b::writeMetadataFile(metadataPath, record, true, error));
+    CHECK(readText(iqPath) == "sentinel IQ data");
+    CHECK_CONTAINS(readText(metadataPath), "receiver = SDRplay RSP1B");
+}
+
+void testMetadataDirectoryRejection() {
+    TemporaryDirectory temporaryDirectory;
+    const auto metadataPath = temporaryDirectory.path() / "capture.txt";
+    std::filesystem::create_directory(metadataPath);
+    const auto childPath = metadataPath / "keep.txt";
+    {
+        std::ofstream child(childPath);
+        child << "directory contents";
+    }
+
+    rsp1b::MetadataRecord record;
+    for (const bool overwriteAuthorized : {false, true}) {
+        std::string error;
+        CHECK(!rsp1b::writeMetadataFile(
+            metadataPath, record, overwriteAuthorized, error));
+        CHECK_CONTAINS(error, "not a regular file");
+        CHECK(std::filesystem::is_directory(metadataPath));
+        CHECK(readText(childPath) == "directory contents");
+    }
+}
+
+void testMetadataSymbolicLinkRejection() {
+    TemporaryDirectory temporaryDirectory;
+    const auto targetPath = temporaryDirectory.path() / "target.txt";
+    const auto linkPath = temporaryDirectory.path() / "linked.txt";
+    {
+        std::ofstream target(targetPath);
+        target << "linked metadata sentinel";
+    }
+
+    std::error_code symlinkError;
+    std::filesystem::create_symlink(targetPath, linkPath, symlinkError);
+    if (symlinkError) {
+        return;
+    }
+
+    rsp1b::MetadataRecord record;
+    std::string error;
+    CHECK(!rsp1b::writeMetadataFile(linkPath, record, true, error));
+    CHECK_CONTAINS(error, "symbolic link");
+    CHECK(readText(targetPath) == "linked metadata sentinel");
+}
+
 }  // namespace
 
 int main() {
     testMetadataContent();
     testPathsAndTimestamp();
     testMetadataOverwriteProtection();
+    testTxtIqCompanionSafety();
+    testMetadataDirectoryRejection();
+    testMetadataSymbolicLinkRejection();
     return test_support::failures == 0 ? 0 : 1;
 }

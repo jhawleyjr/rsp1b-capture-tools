@@ -60,6 +60,7 @@ EnqueueResult IqWriter::enqueue(IqBlock block) {
     const std::uint64_t complexSamples = static_cast<std::uint64_t>(block.size() / 2U);
     std::lock_guard<std::mutex> lock(mutex_);
     if (writerFailure_) {
+        ++droppedBlockCount_;
         return EnqueueResult::writerFailed;
     }
     if (!accepting_) {

@@ -28,7 +28,8 @@ The reliable fallback is to set `SDRPLAY_API_INCLUDE_DIR` to the directory conta
 - Add or update SDK-independent tests for portable logic.
 - Run `git diff --check`, the SDK-free build, and CTest before submitting.
 - Add overwrite-safety and failure-accounting coverage when changing output handling; tests must not
-  replace pre-existing fixtures without explicit authorization.
+  replace pre-existing fixtures without explicit authorization and must preserve rejected directory
+  or symbolic-link fixtures.
 - If you have the official SDK, compile the hardware tools without assuming that CI can do so.
 - Do not add SDRplay headers, libraries, drivers, services, installers, documentation, or other
   proprietary artifacts.

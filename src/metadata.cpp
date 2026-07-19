@@ -11,6 +11,16 @@ namespace rsp1b {
 
 std::filesystem::path metadataPathFor(const std::filesystem::path& iqPath) {
     std::filesystem::path metadataPath = iqPath;
+    std::string extension = iqPath.extension().string();
+    for (char& character : extension) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    if (extension == ".txt") {
+        metadataPath += ".metadata.txt";
+        return metadataPath;
+    }
     metadataPath.replace_extension(".txt");
     return metadataPath;
 }

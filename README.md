@@ -17,7 +17,7 @@ API, drivers, service or daemon, headers, libraries, installers, or other SDK ar
   sample-range, reset, and event statistics.
 - `rsp1b_capture` writes raw interleaved signed 16-bit IQ data and a companion metadata file.
 - Existing IQ or companion metadata files are rejected unless `--force` explicitly authorizes
-  replacement.
+  replacement of regular files; directories, symbolic links, and other special files are refused.
 - Bias-T is disabled by default and explicitly requested off during normal-thread shutdown.
 - `SIGINT` and `SIGTERM` request graceful shutdown where supported.
 - A bounded producer/consumer queue keeps synchronous disk I/O out of the SDRplay stream callback.
@@ -157,16 +157,22 @@ Invalid, missing, non-finite, overflowing, underflowing, zero, and negative nume
 rejected before the IQ output is created or truncated.
 
 Before connecting to the receiver, capture checks both the selected IQ path—including a generated
-default path—and its companion metadata path. If either exists, capture exits with an error and
-leaves it unchanged unless `--force` was supplied. The writer and metadata writer repeat the check
-immediately before opening their files. With `--force`, opening uses explicit truncation, so use the
-option only when replacing both files is intended. If the forced IQ target already exists, capture
-preserves it under a temporary same-directory backup during the initialization window. A reported
-initialization failure or startup cancellation removes the uninitialized replacement and restores
-the original; successful initialization commits the authorized replacement. The C++17
-existence-check-then-open and rename sequence reduces accidental overwrite risk but cannot eliminate
-every filesystem race; avoid concurrent processes targeting the same paths. An abnormal process or
-system failure can leave the temporary backup for manual recovery.
+default path—and its companion metadata path and refuses them if they resolve to the same path.
+Existing targets must be regular files: directories, symbolic links, devices, FIFOs, sockets, and
+other special file types are rejected regardless of `--force`. An existing regular file is left
+unchanged unless `--force` was supplied. The writer, metadata writer, and forced-IQ rollback repeat
+the applicable type checks immediately before modifying files. With `--force`, opening uses explicit
+truncation, so use the option only when replacing both regular files is intended; it never authorizes
+metadata to replace the IQ recording itself.
+
+If the forced IQ target already exists, capture preserves it under a temporary same-directory backup
+during the initialization window. A reported initialization failure or startup cancellation removes
+the uninitialized replacement and restores the original; successful initialization commits the
+authorized replacement. The C++17 check-then-open and rename sequence, path normalization, and
+ordinary platform case comparison reduce accidental overwrite risk but cannot eliminate every
+filesystem race or alias. Hard links, mount-specific behavior, and concurrent path changes require
+operator care; avoid concurrent processes targeting the same paths. An abnormal process or system
+failure can leave the temporary backup for manual recovery.
 
 Examples:
 
@@ -224,15 +230,22 @@ At the default 5,000,000 samples/second, expect approximately 20 MB/second, 1.2 
 The stream callback interleaves samples and submits blocks to a bounded 64-block queue. A dedicated
 thread writes accepted blocks in order. If the queue fills, the capture stops and fails instead of
 silently discarding data. If a write fails, dropped-block statistics include the current unwritten
-block and accepted blocks discarded from the queue, while accepted and written sample counters keep
-their existing meanings. Sustained storage slower than the incoming data rate will therefore surface
-as an error.
+block, accepted blocks discarded from the queue, and each later enqueue attempt rejected because the
+writer has failed. Those later rejected blocks do not increase the accepted-sample count. Sustained
+storage slower than the incoming data rate will therefore surface as an error.
 
 ## Metadata
 
-For `captures/example.iq`, the companion file is `captures/example.txt`. Existing keys describing the
-receiver, serial number, frequency, sample rate, bandwidth, IF mode, Bias-T, notches, AGC, requested
-duration, sample count, format, byte order, and local timestamp are retained.
+The companion path normally replaces the IQ path's final extension with `.txt`, so
+`captures/example.iq` and `captures/example.raw` both use `captures/example.txt`. If the IQ path
+already has a case-insensitive `.txt` extension, replacement would risk an alias, so
+`.metadata.txt` is appended to the complete name: `captures/example.txt` uses
+`captures/example.txt.metadata.txt`, and `captures/example.TXT` uses
+`captures/example.TXT.metadata.txt`.
+
+Existing keys describing the receiver, serial number, frequency, sample rate, bandwidth, IF mode,
+Bias-T, notches, AGC, requested duration, sample count, format, byte order, and local timestamp are
+retained.
 
 Additional fields report:
 
@@ -266,8 +279,9 @@ With `RSP1B_BUILD_TOOLS=OFF`, CMake does not search for the SDRplay SDK and does
 `rsp1b_device.cpp`, `rsp1b_probe`, or `rsp1b_capture`. The tests cover argument parsing, metadata,
 portable timestamps, block ordering, queue draining, writer failures, overflow, empty shutdown, and
 closure behavior. Tests also cover overwrite authorization, forced-output rollback, metadata
-protection, startup signal observation, and failed-writer dropped-block accounting. They do not
-simulate the proprietary API or radio hardware.
+companion naming and protection, directory and symbolic-link rejection, startup signal observation,
+and failed-writer dropped-block accounting. They do not simulate the proprietary API or radio
+hardware.
 
 The GitHub Actions workflow runs this portable configuration on `ubuntu-latest`, `macos-latest`, and
 `windows-latest`. The stable aggregate check is named **CI success**.
