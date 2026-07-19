@@ -4,6 +4,7 @@
 
 #include <cerrno>
 #include <cstdlib>
+#include <cmath>
 #include <utility>
 
 namespace rsp1b {
