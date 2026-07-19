@@ -1,6 +1,7 @@
 #include "capture_options.hpp"
 #include "iq_writer.hpp"
 #include "metadata.hpp"
+#include "output_file.hpp"
 #include "rsp1b_device.hpp"
 #include "signal_stop.hpp"
 #include "timestamp.hpp"
@@ -97,6 +98,14 @@ void removeEmptyCapture(const std::filesystem::path& outputPath) {
     }
 }
 
+bool startupInterrupted() {
+    if (!rsp1b::signalStopRequested()) {
+        return false;
+    }
+    std::cerr << "Capture interrupted during startup; receiver initialization was skipped.\n";
+    return true;
+}
+
 int runCapture(int argc, char** argv) {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
@@ -131,12 +140,26 @@ int runCapture(int argc, char** argv) {
         std::cout << "Bias-T is OFF. Use --bias-t 1 only when antenna DC power is required.\n";
     }
 
+    const std::filesystem::path metadataPath = rsp1b::metadataPathFor(options.outputPath);
     std::string filesystemError;
+    bool outputExisted = false;
+    if (!rsp1b::checkOutputPath(options.outputPath, options.force, "IQ output", outputExisted,
+                                filesystemError)) {
+        std::cerr << filesystemError << '\n';
+        return 1;
+    }
+    bool metadataExisted = false;
+    if (!rsp1b::checkOutputPath(metadataPath, options.force, "metadata output", metadataExisted,
+                                filesystemError)) {
+        std::cerr << filesystemError << '\n';
+        return 1;
+    }
     if (!createOutputDirectory(options.outputPath, filesystemError)) {
         std::cerr << filesystemError << '\n';
         return 1;
     }
 
+    rsp1b::ExistingFileRollback outputRollback;
     std::unique_ptr<rsp1b::IqWriter> writer;
     rsp1b::EventState events;
     CaptureStreamState capture;
@@ -144,22 +167,69 @@ int runCapture(int argc, char** argv) {
     callbackContext.events = &events;
     callbackContext.streamContext = &capture;
     rsp1b::DeviceSession session(std::cout, std::cerr);
-    if (!session.connect() ||
-        !session.configure({options.centerHz, options.sampleRateSps, options.biasT})) {
+    if (!session.connect()) {
+        return 1;
+    }
+    if (startupInterrupted()) {
+        return 1;
+    }
+    if (!session.configure({options.centerHz, options.sampleRateSps, options.biasT})) {
+        return 1;
+    }
+    if (startupInterrupted()) {
+        return 1;
+    }
+
+    if (!outputRollback.preserve(options.outputPath, outputExisted, filesystemError)) {
+        std::cerr << filesystemError << '\n';
         return 1;
     }
 
     std::string writerError;
-    writer = rsp1b::IqWriter::openFile(
-        options.outputPath, rsp1b::kDefaultMaxQueuedBlocks, &events.stopRequested, writerError);
+    writer = rsp1b::IqWriter::openFile(options.outputPath,
+                                       options.force,
+                                       rsp1b::kDefaultMaxQueuedBlocks,
+                                       &events.stopRequested,
+                                       writerError);
     if (writer == nullptr) {
         std::cerr << writerError << '\n';
+        if (!outputRollback.restore(filesystemError)) {
+            std::cerr << filesystemError << '\n';
+        }
         return 1;
     }
+    const auto discardUninitializedOutput = [&]() {
+        if (outputRollback.active()) {
+            std::string rollbackError;
+            if (!outputRollback.restore(rollbackError)) {
+                std::cerr << rollbackError << '\n';
+            }
+        } else {
+            removeEmptyCapture(options.outputPath);
+        }
+    };
     capture.writer = writer.get();
-    if (!session.initialise(streamCallback, callbackContext)) {
+    if (startupInterrupted()) {
+        capture.writer = nullptr;
         writer->finish();
-        removeEmptyCapture(options.outputPath);
+        discardUninitializedOutput();
+        return 1;
+    }
+    if (!session.initialise(streamCallback, callbackContext)) {
+        capture.writer = nullptr;
+        writer->finish();
+        discardUninitializedOutput();
+        return 1;
+    }
+    if (!outputRollback.commit(filesystemError)) {
+        std::cerr << filesystemError << '\n';
+        events.stopRequested.store(true, std::memory_order_relaxed);
+        session.stopStreaming();
+        session.shutdown();
+        callbackContext.session = nullptr;
+        capture.writer = nullptr;
+        writer->finish();
+        discardUninitializedOutput();
         return 1;
     }
 
@@ -256,9 +326,8 @@ int runCapture(int argc, char** argv) {
     metadata.statistics = statistics;
     metadata.serialNumber = serialNumber;
     metadata.timestampLocal = timestamp;
-    const std::filesystem::path metadataPath = rsp1b::metadataPathFor(options.outputPath);
     std::string metadataError;
-    if (!rsp1b::writeMetadataFile(metadataPath, metadata, metadataError)) {
+    if (!rsp1b::writeMetadataFile(metadataPath, metadata, options.force, metadataError)) {
         std::cerr << metadataError << '\n';
         success = false;
     } else {

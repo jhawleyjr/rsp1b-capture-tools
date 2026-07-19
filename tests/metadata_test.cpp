@@ -3,9 +3,41 @@
 #include "test_support.hpp"
 #include "timestamp.hpp"
 
+#include <chrono>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 namespace {
+
+class TemporaryDirectory {
+public:
+    TemporaryDirectory() {
+        const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = std::filesystem::temp_directory_path() /
+                ("rsp1b_metadata_test_" + std::to_string(suffix));
+        std::filesystem::create_directories(path_);
+    }
+
+    ~TemporaryDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    const std::filesystem::path& path() const {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+std::string readText(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
 
 void testMetadataContent() {
     rsp1b::MetadataRecord record;
@@ -47,6 +79,7 @@ void testMetadataContent() {
     CHECK_CONTAINS(metadata, "total_complex_samples_accepted = 12");
     CHECK_CONTAINS(metadata, "reset_count = 2");
     CHECK_CONTAINS(metadata, "queue_overflow_count = 1");
+    CHECK_CONTAINS(metadata, "dropped_block_count = 1");
     CHECK_CONTAINS(metadata, "writer_failure = 1");
     CHECK_CONTAINS(metadata, "interrupted = 1");
     CHECK_CONTAINS(metadata, "device_removed = 1");
@@ -59,10 +92,32 @@ void testPathsAndTimestamp() {
     CHECK(!rsp1b::formatLocalTimestamp(std::time(nullptr), "%Y%m%d_%H%M%S").empty());
 }
 
+void testMetadataOverwriteProtection() {
+    TemporaryDirectory temporaryDirectory;
+    const auto metadataPath = temporaryDirectory.path() / "capture.txt";
+    {
+        std::ofstream sentinel(metadataPath);
+        sentinel << "sentinel metadata";
+    }
+
+    rsp1b::MetadataRecord record;
+    record.options.durationSeconds = 1.0;
+    record.options.outputPath = "capture.iq";
+    std::string error;
+    CHECK(!rsp1b::writeMetadataFile(metadataPath, record, false, error));
+    CHECK_CONTAINS(error, "existing file was not modified");
+    CHECK_CONTAINS(error, "--force");
+    CHECK(readText(metadataPath) == "sentinel metadata");
+
+    CHECK(rsp1b::writeMetadataFile(metadataPath, record, true, error));
+    CHECK_CONTAINS(readText(metadataPath), "receiver = SDRplay RSP1B");
+}
+
 }  // namespace
 
 int main() {
     testMetadataContent();
     testPathsAndTimestamp();
+    testMetadataOverwriteProtection();
     return test_support::failures == 0 ? 0 : 1;
 }

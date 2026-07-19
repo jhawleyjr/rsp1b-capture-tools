@@ -33,6 +33,7 @@ std::filesystem::path metadataPathFor(const std::filesystem::path& iqPath);
 std::string renderMetadata(const MetadataRecord& record);
 bool writeMetadataFile(const std::filesystem::path& path,
                        const MetadataRecord& record,
+                       bool overwriteAuthorized,
                        std::string& error);
 
 }  // namespace rsp1b

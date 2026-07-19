@@ -21,6 +21,7 @@ void testValidOptions() {
                                 "2.5",
                                 "--out",
                                 "test.iq",
+                                "--force",
                                 "--bias-t",
                                 "1",
                                 "--center",
@@ -30,6 +31,7 @@ void testValidOptions() {
     CHECK(outcome.result == rsp1b::ParseResult::success);
     CHECK(outcome.options.durationSeconds == 2.5);
     CHECK(outcome.options.outputPath == "test.iq");
+    CHECK(outcome.options.force);
     CHECK(outcome.options.biasT == 1);
     CHECK(outcome.options.centerHz == 100.25);
     CHECK(outcome.options.sampleRateSps == 2000000.5);
@@ -41,11 +43,17 @@ void testDefaultsAndHelp() {
     CHECK(defaults.options.centerHz == rsp1b::kDefaultCenterHz);
     CHECK(defaults.options.sampleRateSps == rsp1b::kDefaultSampleRateSps);
     CHECK(defaults.options.biasT == 0);
+    CHECK(!defaults.options.force);
     CHECK(defaults.options.outputPath.extension() == ".iq");
+
+    const auto forced = parse({"capture", "--duration", "1", "--force"});
+    CHECK(forced.result == rsp1b::ParseResult::success);
+    CHECK(forced.options.force);
 
     const auto longHelp = parse({"capture", "--help"});
     CHECK(longHelp.result == rsp1b::ParseResult::help);
     CHECK_CONTAINS(longHelp.message, "Usage:");
+    CHECK_CONTAINS(longHelp.message, "--force");
 
     const auto shortHelp = parse({"capture", "-h"});
     CHECK(shortHelp.result == rsp1b::ParseResult::help);

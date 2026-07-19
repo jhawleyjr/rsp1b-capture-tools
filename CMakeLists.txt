@@ -24,14 +24,21 @@ add_library(rsp1b_core
     src/capture_options.cpp
     src/iq_writer.cpp
     src/metadata.cpp
+    src/output_file.cpp
     src/timestamp.cpp
 )
 target_include_directories(rsp1b_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(rsp1b_core PUBLIC Threads::Threads)
 rsp1b_enable_warnings(rsp1b_core)
 
+add_library(rsp1b_signal_stop src/signal_stop.cpp)
+target_include_directories(rsp1b_signal_stop PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+rsp1b_enable_warnings(rsp1b_signal_stop)
+
 if(RSP1B_BUILD_TOOLS)
     set(_sdrplay_hints)
+    set(_sdrplay_include_suffixes include Include inc Inc)
+    set(_sdrplay_library_suffixes lib lib64 Lib)
     if(SDRPLAY_API_ROOT)
         list(APPEND _sdrplay_hints "${SDRPLAY_API_ROOT}")
     endif()
@@ -39,21 +46,69 @@ if(RSP1B_BUILD_TOOLS)
         list(APPEND _sdrplay_hints "$ENV{SDRPLAY_API_ROOT}")
     endif()
 
+    if(WIN32)
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            set(_sdrplay_windows_arch x64)
+            set(_sdrplay_program_files "$ENV{ProgramW6432}" "$ENV{ProgramFiles}")
+        else()
+            set(_sdrplay_windows_arch x86)
+            set(_sdrplay_program_files "$ENV{ProgramFiles\(x86\)}" "$ENV{ProgramFiles}")
+        endif()
+
+        foreach(_program_files_root IN LISTS _sdrplay_program_files)
+            if(NOT "${_program_files_root}" STREQUAL "")
+                list(APPEND _sdrplay_hints
+                    "${_program_files_root}/SDRplay/API"
+                    "${_program_files_root}/SDRplay"
+                )
+            endif()
+        endforeach()
+        list(APPEND _sdrplay_include_suffixes API/include API/Include API/inc API/Inc)
+        set(_sdrplay_library_suffixes
+            "${_sdrplay_windows_arch}"
+            "lib/${_sdrplay_windows_arch}"
+            "Lib/${_sdrplay_windows_arch}"
+            "API/${_sdrplay_windows_arch}"
+        )
+    endif()
+    list(REMOVE_DUPLICATES _sdrplay_hints)
+
     find_path(SDRPLAY_API_INCLUDE_DIR
         NAMES sdrplay_api.h
         HINTS ${_sdrplay_hints}
-        PATH_SUFFIXES include Include
+        PATH_SUFFIXES ${_sdrplay_include_suffixes}
+        DOC "Directory containing the official SDRplay API header sdrplay_api.h"
     )
     find_library(SDRPLAY_API_LIBRARY
         NAMES sdrplay_api
         HINTS ${_sdrplay_hints}
-        PATH_SUFFIXES lib lib64 Lib
+        PATH_SUFFIXES ${_sdrplay_library_suffixes}
+        DOC "Architecture-matching official SDRplay API library"
     )
+
+    if(WIN32 AND SDRPLAY_API_LIBRARY)
+        file(TO_CMAKE_PATH "${SDRPLAY_API_LIBRARY}" _sdrplay_library_normalized)
+        string(TOLOWER "${_sdrplay_library_normalized}" _sdrplay_library_normalized)
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND
+           _sdrplay_library_normalized MATCHES "/x86(/|$)")
+            message(FATAL_ERROR
+                "SDRPLAY_API_LIBRARY points to an x86 library, but this is a 64-bit build. "
+                "Select the SDK's x64 library.")
+        elseif(CMAKE_SIZEOF_VOID_P EQUAL 4 AND
+               _sdrplay_library_normalized MATCHES "/x64(/|$)")
+            message(FATAL_ERROR
+                "SDRPLAY_API_LIBRARY points to an x64 library, but this is a 32-bit build. "
+                "Select the SDK's x86 library.")
+        endif()
+    endif()
 
     if(NOT SDRPLAY_API_INCLUDE_DIR OR NOT SDRPLAY_API_LIBRARY)
         message(FATAL_ERROR
-            "The SDRplay API SDK was not found. Set SDRPLAY_API_ROOT to the SDK installation "
-            "prefix, or configure with -DRSP1B_BUILD_TOOLS=OFF for portable tests only.")
+            "The SDRplay API SDK was not found. Provide an installation-prefix hint with "
+            "-DSDRPLAY_API_ROOT=<prefix>, or set both explicit cache overrides "
+            "-DSDRPLAY_API_INCLUDE_DIR=<directory-containing-sdrplay_api.h> and "
+            "-DSDRPLAY_API_LIBRARY=<full-path-to-architecture-matching-library>. "
+            "Use -DRSP1B_BUILD_TOOLS=OFF for portable tests only.")
     endif()
 
     add_library(SDRplay::API UNKNOWN IMPORTED)
@@ -64,10 +119,9 @@ if(RSP1B_BUILD_TOOLS)
 
     add_library(rsp1b_device
         src/rsp1b_device.cpp
-        src/signal_stop.cpp
     )
     target_include_directories(rsp1b_device PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_link_libraries(rsp1b_device PUBLIC SDRplay::API Threads::Threads)
+    target_link_libraries(rsp1b_device PUBLIC SDRplay::API Threads::Threads rsp1b_signal_stop)
     rsp1b_enable_warnings(rsp1b_device)
 
     add_executable(rsp1b_probe src/rsp1b_probe.cpp)
@@ -94,4 +148,9 @@ if(BUILD_TESTING)
     target_link_libraries(iq_writer_test PRIVATE rsp1b_core)
     rsp1b_enable_warnings(iq_writer_test)
     add_test(NAME iq_writer COMMAND iq_writer_test)
+
+    add_executable(signal_stop_test tests/signal_stop_test.cpp)
+    target_link_libraries(signal_stop_test PRIVATE rsp1b_signal_stop)
+    rsp1b_enable_warnings(signal_stop_test)
+    add_test(NAME signal_stop COMMAND signal_stop_test)
 endif()

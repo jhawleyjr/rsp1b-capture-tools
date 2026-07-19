@@ -19,12 +19,16 @@ ctest --test-dir build-ci -C Release --output-on-failure
 
 To compile the hardware tools, install the official SDRplay API 3.14 or newer and configure with
 `RSP1B_BUILD_TOOLS=ON`. If CMake cannot locate it, set `SDRPLAY_API_ROOT` to the installation prefix.
+The reliable fallback is to set `SDRPLAY_API_INCLUDE_DIR` to the directory containing
+`sdrplay_api.h` and `SDRPLAY_API_LIBRARY` to the full path of the architecture-matching library.
 
 ## Style and tests
 
 - Use four-space indentation and follow `.clang-format` and `.editorconfig`.
 - Add or update SDK-independent tests for portable logic.
 - Run `git diff --check`, the SDK-free build, and CTest before submitting.
+- Add overwrite-safety and failure-accounting coverage when changing output handling; tests must not
+  replace pre-existing fixtures without explicit authorization.
 - If you have the official SDK, compile the hardware tools without assuming that CI can do so.
 - Do not add SDRplay headers, libraries, drivers, services, installers, documentation, or other
   proprietary artifacts.

@@ -15,6 +15,7 @@ struct CaptureOptions {
     double centerHz = kDefaultCenterHz;
     double sampleRateSps = kDefaultSampleRateSps;
     int biasT = kDefaultBiasT;
+    bool force = false;
     std::filesystem::path outputPath;
 };
 

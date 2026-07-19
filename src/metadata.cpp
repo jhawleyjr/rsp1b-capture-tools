@@ -1,5 +1,7 @@
 #include "metadata.hpp"
 
+#include "output_file.hpp"
+
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -57,7 +59,13 @@ std::string renderMetadata(const MetadataRecord& record) {
 
 bool writeMetadataFile(const std::filesystem::path& path,
                        const MetadataRecord& record,
+                       bool overwriteAuthorized,
                        std::string& error) {
+    bool pathExisted = false;
+    if (!checkOutputPath(path, overwriteAuthorized, "metadata output", pathExisted, error)) {
+        return false;
+    }
+
     std::ofstream output(path, std::ios::out | std::ios::trunc);
     if (!output) {
         error = "Unable to open metadata output: " + path.string();

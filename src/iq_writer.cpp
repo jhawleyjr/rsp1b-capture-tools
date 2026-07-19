@@ -1,5 +1,7 @@
 #include "iq_writer.hpp"
 
+#include "output_file.hpp"
+
 #include <fstream>
 #include <limits>
 #include <utility>
@@ -36,9 +38,15 @@ IqWriter::~IqWriter() noexcept {
 }
 
 std::unique_ptr<IqWriter> IqWriter::openFile(const std::filesystem::path& path,
+                                             bool overwriteAuthorized,
                                              std::size_t maxQueuedBlocks,
                                              std::atomic<bool>* stopRequested,
                                              std::string& error) {
+    bool pathExisted = false;
+    if (!checkOutputPath(path, overwriteAuthorized, "IQ output", pathExisted, error)) {
+        return nullptr;
+    }
+
     auto output = std::make_unique<std::ofstream>(
         path, std::ios::out | std::ios::binary | std::ios::trunc);
     if (!*output) {
@@ -127,13 +135,7 @@ void IqWriter::writerLoop() noexcept {
         if (!block.empty()) {
             const auto byteCount = block.size() * sizeof(std::int16_t);
             if (byteCount > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max())) {
-                std::lock_guard<std::mutex> lock(mutex_);
-                writerFailure_ = true;
-                accepting_ = false;
-                closing_ = true;
-                failureMessage_ = "IQ block is too large for the output stream.";
-                queue_.clear();
-                requestStop();
+                recordWriterFailure("IQ block is too large for the output stream.", true);
                 break;
             }
             output_->write(reinterpret_cast<const char*>(block.data()),
@@ -141,13 +143,7 @@ void IqWriter::writerLoop() noexcept {
         }
 
         if (!*output_) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            writerFailure_ = true;
-            accepting_ = false;
-            closing_ = true;
-            failureMessage_ = "IQ output stream failed while writing.";
-            queue_.clear();
-            requestStop();
+            recordWriterFailure("IQ output stream failed while writing.", true);
             break;
         }
 
@@ -159,14 +155,25 @@ void IqWriter::writerLoop() noexcept {
 
     output_->flush();
     if (!*output_) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        writerFailure_ = true;
-        accepting_ = false;
-        if (failureMessage_.empty()) {
-            failureMessage_ = "IQ output stream failed while flushing.";
-        }
-        requestStop();
+        recordWriterFailure("IQ output stream failed while flushing.", false);
     }
+}
+
+void IqWriter::recordWriterFailure(const std::string& message,
+                                   bool currentBlockWasDropped) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!writerFailure_) {
+        droppedBlockCount_ += static_cast<std::uint64_t>(queue_.size());
+        if (currentBlockWasDropped) {
+            ++droppedBlockCount_;
+        }
+        queue_.clear();
+        failureMessage_ = message;
+    }
+    writerFailure_ = true;
+    accepting_ = false;
+    closing_ = true;
+    requestStop();
 }
 
 void IqWriter::requestStop() noexcept {

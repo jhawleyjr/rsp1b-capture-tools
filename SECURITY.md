@@ -7,14 +7,21 @@ Security fixes are currently provided for the latest code on the `main` branch a
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a suspected vulnerability. Contact the maintainer through the public
-[GitHub profile](https://github.com/jhawleyjr) and request an appropriate private reporting channel.
-Include a clear description, reproduction steps, affected versions, and potential impact. Please do
-not include receiver serial numbers, credentials, or private filesystem paths.
+Do not disclose suspected vulnerability details in a public issue. Once this repository is public
+and GitHub private vulnerability reporting has been enabled, use the
+[private security advisory form](https://github.com/jhawleyjr/rsp1b-capture-tools/security/advisories/new).
+The form requires the repository's private vulnerability reporting setting to be enabled after
+publication; this policy does not claim that the setting is currently enabled.
 
-The maintainer will acknowledge a report when contact is established and will coordinate validation,
-remediation, and disclosure as appropriate. This document does not claim that GitHub private
-vulnerability reporting is enabled.
+If the private form is temporarily unavailable, open a minimal public
+[contact-request issue](https://github.com/jhawleyjr/rsp1b-capture-tools/issues/new) that asks the
+maintainer to establish a private reporting channel. Include no vulnerability description,
+reproduction steps, exploit information, attachments, receiver serial numbers, credentials, or
+private filesystem paths in that public request.
+
+In the private report, include a clear description, reproduction steps, affected versions, and
+potential impact. The maintainer will acknowledge a report when contact is established and will
+coordinate validation, remediation, and disclosure as appropriate.
 
 ## Scope
 

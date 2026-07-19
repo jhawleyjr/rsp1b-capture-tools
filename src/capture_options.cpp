@@ -36,7 +36,7 @@ std::string captureUsage(const std::string& programName) {
     return "Usage:\n"
            "  " +
            programName +
-           " --duration SECONDS [--out captures/file.iq]\n"
+           " --duration SECONDS [--out captures/file.iq] [--force]\n"
            "      [--bias-t 0|1] [--center HZ] [--sample-rate SPS]\n";
 }
 
@@ -85,6 +85,8 @@ ParseOutcome parseCaptureOptions(const std::vector<std::string>& arguments) {
             }
             options.outputPath = *value;
             sawOutput = true;
+        } else if (argument == "--force") {
+            options.force = true;
         } else if (argument == "--bias-t") {
             const std::string* value = requireValue();
             if (value == nullptr) {

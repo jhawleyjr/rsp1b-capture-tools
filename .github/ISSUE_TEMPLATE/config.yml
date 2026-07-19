@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Security reports
-    url: https://github.com/jhawleyjr
-    about: Request a private contact channel instead of disclosing a vulnerability publicly.
+  - name: Private security report
+    url: https://github.com/jhawleyjr/rsp1b-capture-tools/security/advisories/new
+    about: Use after private vulnerability reporting is enabled; never disclose details publicly.
+  - name: Security contact request
+    url: https://github.com/jhawleyjr/rsp1b-capture-tools/issues/new
+    about: If the private form is unavailable, request private contact without vulnerability details.

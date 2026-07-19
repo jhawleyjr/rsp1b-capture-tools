@@ -82,6 +82,14 @@ void printStatistics(const StreamStatistics& statistics) {
     }
 }
 
+bool startupInterrupted() {
+    if (!rsp1b::signalStopRequested()) {
+        return false;
+    }
+    std::cerr << "Probe interrupted during startup; receiver initialization was skipped.\n";
+    return true;
+}
+
 int runProbe() {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
@@ -92,16 +100,28 @@ int runProbe() {
         return 1;
     }
 
+    rsp1b::DeviceSession session(std::cout, std::cerr);
+    if (!session.connect()) {
+        return 1;
+    }
+    if (startupInterrupted()) {
+        return 1;
+    }
+    if (!session.configure({})) {
+        return 1;
+    }
+    if (startupInterrupted()) {
+        return 1;
+    }
+
     StreamStatistics statistics;
     rsp1b::EventState events;
     rsp1b::DeviceCallbackContext callbackContext;
     callbackContext.events = &events;
     callbackContext.streamContext = &statistics;
-    rsp1b::DeviceSession session(std::cout, std::cerr);
-    if (!session.connect() || !session.configure({})) {
+    if (startupInterrupted()) {
         return 1;
     }
-
     if (!session.initialise(streamCallback, callbackContext)) {
         return 1;
     }

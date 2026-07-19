@@ -16,6 +16,8 @@ API, drivers, service or daemon, headers, libraries, installers, or other SDK ar
 - `rsp1b_probe` configures a genuine RSP1B, streams for about one second, and reports callback,
   sample-range, reset, and event statistics.
 - `rsp1b_capture` writes raw interleaved signed 16-bit IQ data and a companion metadata file.
+- Existing IQ or companion metadata files are rejected unless `--force` explicitly authorizes
+  replacement.
 - Bias-T is disabled by default and explicitly requested off during normal-thread shutdown.
 - `SIGINT` and `SIGTERM` request graceful shutdown where supported.
 - A bounded producer/consumer queue keeps synchronous disk I/O out of the SDRplay stream callback.
@@ -28,13 +30,16 @@ API, drivers, service or daemon, headers, libraries, installers, or other SDK ar
 Only genuine SDRplay RSP1B receivers are supported. The tools deliberately reject other receiver
 models.
 
-The build supports little-endian Linux, macOS, and Windows targets with a C++17 compiler and an
-official SDRplay API installation. SDRplay added RSP1B support in API 3.14, which is the minimum
-accepted version. The current code has been compiled on macOS against API 3.15 headers and libraries;
-the runtime API version must match the version used at compile time.
+The portable core supports little-endian Linux, macOS, and Windows targets with a C++17 compiler.
+SDRplay added RSP1B support in API 3.14, which is the minimum accepted version. The proprietary
+adapter additionally requires an official SDRplay API installation. The current adapter code has
+been compiled on macOS against API 3.15 headers and libraries; the runtime API version must match the
+version used at compile time.
 
-Portable CI runs on Ubuntu, macOS, and Windows, but it does not download, compile, or exercise the
-proprietary SDRplay adapter. Real SDK integration and receiver behavior require local verification.
+Portable CI verifies the SDK-independent core on Ubuntu, macOS, and Windows. It does not download,
+compile, or exercise the proprietary SDRplay adapter, so Windows SDK integration, runtime loading,
+and real receiver behavior remain dependent on the local SDK, driver, service, and hardware and are
+not claimed as verified by that CI.
 
 ## Prerequisites
 
@@ -52,7 +57,13 @@ proprietary SDRplay adapter. Real SDK integration and receiver behavior require 
 ## Build
 
 `RSP1B_BUILD_TOOLS` defaults to `ON`. CMake searches normal platform locations and accepts either the
-CMake cache variable or environment variable `SDRPLAY_API_ROOT` as an installation-prefix hint.
+CMake cache variable or environment variable `SDRPLAY_API_ROOT` as an installation-prefix hint. The
+reliable fallback is to set both cache entries explicitly:
+
+```text
+-DSDRPLAY_API_INCLUDE_DIR=/path/to/directory/containing/sdrplay_api.h
+-DSDRPLAY_API_LIBRARY=/full/path/to/the/architecture-matching/library
+```
 
 ### macOS
 
@@ -96,8 +107,15 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The matching SDRplay runtime DLL and service must be available through the official installation at
-run time.
+CMake considers likely official installation roots beneath `Program Files` and searches only the
+`x64` or `x86` SDK library locations matching the configured target architecture. If automatic
+discovery does not match the local installer layout, set `SDRPLAY_API_INCLUDE_DIR` and
+`SDRPLAY_API_LIBRARY` explicitly; the selected import library must match the build architecture.
+
+At run time, Windows must be able to locate the matching `sdrplay_api.dll` through the normal DLL
+search rules, and the official SDRplay driver and API service must be installed and available. The
+import library used at link time does not embed or replace that runtime DLL. The proprietary adapter
+has not been hardware-tested on Windows as part of portable CI.
 
 ## Quick start
 
@@ -122,13 +140,14 @@ On a multi-configuration Windows build, executables are normally under `build/Re
 
 ```text
 rsp1b_capture --duration SECONDS [--out captures/file.iq]
-    [--bias-t 0|1] [--center HZ] [--sample-rate SPS]
+    [--force] [--bias-t 0|1] [--center HZ] [--sample-rate SPS]
 ```
 
 | Option | Description | Default |
 | --- | --- | --- |
 | `--duration SECONDS` | Required finite capture duration greater than zero; decimals are accepted. | None |
 | `--out PATH` | IQ output path. | `captures/rsp1b_capture_<timestamp>.iq` |
+| `--force` | Authorize replacement of existing IQ and companion metadata files. | Disabled |
 | `--bias-t 0|1` | Disable or explicitly enable antenna DC power. | `0` |
 | `--center HZ` | Finite center frequency greater than zero; decimals are accepted. | `1575420000` |
 | `--sample-rate SPS` | Finite sample rate greater than zero; decimals are accepted. | `5000000` |
@@ -137,12 +156,25 @@ rsp1b_capture --duration SECONDS [--out captures/file.iq]
 Invalid, missing, non-finite, overflowing, underflowing, zero, and negative numeric values are
 rejected before the IQ output is created or truncated.
 
+Before connecting to the receiver, capture checks both the selected IQ path—including a generated
+default path—and its companion metadata path. If either exists, capture exits with an error and
+leaves it unchanged unless `--force` was supplied. The writer and metadata writer repeat the check
+immediately before opening their files. With `--force`, opening uses explicit truncation, so use the
+option only when replacing both files is intended. If the forced IQ target already exists, capture
+preserves it under a temporary same-directory backup during the initialization window. A reported
+initialization failure or startup cancellation removes the uninitialized replacement and restores
+the original; successful initialization commits the authorized replacement. The C++17
+existence-check-then-open and rename sequence reduces accidental overwrite risk but cannot eliminate
+every filesystem race; avoid concurrent processes targeting the same paths. An abnormal process or
+system failure can leave the temporary backup for manual recovery.
+
 Examples:
 
 ```sh
 ./build/rsp1b_capture --duration 10
 ./build/rsp1b_capture --duration 30 --center 1575420000 --sample-rate 5000000
 ./build/rsp1b_capture --duration 2.5 --out captures/gps_l1.iq
+./build/rsp1b_capture --duration 2.5 --out captures/gps_l1.iq --force
 ```
 
 ### Bias-T safety warning
@@ -155,9 +187,12 @@ it off before uninitializing the device.
 ## Graceful shutdown and limitations
 
 On `Ctrl-C`, `SIGINT`, or `SIGTERM` where supported, the signal handler only sets a signal-safe stop
-indicator. The application thread then stops streaming, requests Bias-T off, drains and closes the IQ
-writer, writes partial-capture metadata when possible, releases the receiver, and closes the API. An
-interrupted capture exits with a nonzero status.
+indicator. During startup, both tools check that indicator after connection, after configuration,
+and immediately before receiver initialization; an observed stop skips initialization and normal
+RAII cleanup releases the selected device and closes the API. During streaming, the application
+thread stops the stream, requests Bias-T off, drains and closes the IQ writer, writes partial-capture
+metadata when possible, releases the receiver, and closes the API. An interrupted capture exits with
+a nonzero status.
 
 This cleanup cannot be guaranteed after `SIGKILL`, power loss, process or operating-system crashes,
 hardware failure, forced termination, or an SDK/service failure. Treat external Bias-T power safety
@@ -188,7 +223,9 @@ At the default 5,000,000 samples/second, expect approximately 20 MB/second, 1.2 
 
 The stream callback interleaves samples and submits blocks to a bounded 64-block queue. A dedicated
 thread writes accepted blocks in order. If the queue fills, the capture stops and fails instead of
-silently discarding data. Sustained storage slower than the incoming data rate will therefore surface
+silently discarding data. If a write fails, dropped-block statistics include the current unwritten
+block and accepted blocks discarded from the queue, while accepted and written sample counters keep
+their existing meanings. Sustained storage slower than the incoming data rate will therefore surface
 as an error.
 
 ## Metadata
@@ -228,7 +265,9 @@ ctest --test-dir build-ci -C Release --output-on-failure
 With `RSP1B_BUILD_TOOLS=OFF`, CMake does not search for the SDRplay SDK and does not compile
 `rsp1b_device.cpp`, `rsp1b_probe`, or `rsp1b_capture`. The tests cover argument parsing, metadata,
 portable timestamps, block ordering, queue draining, writer failures, overflow, empty shutdown, and
-closure behavior. They do not simulate the proprietary API or radio hardware.
+closure behavior. Tests also cover overwrite authorization, forced-output rollback, metadata
+protection, startup signal observation, and failed-writer dropped-block accounting. They do not
+simulate the proprietary API or radio hardware.
 
 The GitHub Actions workflow runs this portable configuration on `ubuntu-latest`, `macos-latest`, and
 `windows-latest`. The stable aggregate check is named **CI success**.
@@ -237,9 +276,11 @@ The GitHub Actions workflow runs this portable configuration on `ubuntu-latest`,
 
 ### CMake cannot find the SDRplay API
 
-Install the official API and point `SDRPLAY_API_ROOT` at its prefix, which should contain the SDK
-header and platform library beneath `include` and `lib`-style directories. For portable tests only,
-configure with `-DRSP1B_BUILD_TOOLS=OFF`.
+Install the official API and point `SDRPLAY_API_ROOT` at its prefix. If discovery still fails, set
+`SDRPLAY_API_INCLUDE_DIR` to the directory containing `sdrplay_api.h` and
+`SDRPLAY_API_LIBRARY` to the full path of the target-architecture library. On Windows, select `x64`
+for a 64-bit build or `x86` for a 32-bit build. For portable tests only, configure with
+`-DRSP1B_BUILD_TOOLS=OFF`.
 
 ### API version mismatch
 
@@ -270,8 +311,10 @@ or a detected streaming failure.
   initialization, event handling, Bias-T shutdown, release, and cleanup through an RAII session.
 - `src/rsp1b_capture.cpp` coordinates capture lifetime and the SDRplay stream callback.
 - `src/rsp1b_probe.cpp` implements the short diagnostic stream.
-- `src/capture_options.*`, `src/timestamp.*`, `src/metadata.*`, and `src/iq_writer.*` contain portable,
-  SDK-independent logic.
+- `src/capture_options.*`, `src/timestamp.*`, `src/metadata.*`, `src/output_file.*`, and
+  `src/iq_writer.*` contain portable, SDK-independent logic.
+- `src/signal_stop.*` contains the SDK-independent signal indicator used at startup and while
+  streaming.
 - `tests/` contains dependency-free CTest executables.
 
 ## Contributing and security
