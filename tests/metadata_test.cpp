@@ -14,7 +14,7 @@
 namespace {
 
 class TemporaryDirectory {
-public:
+  public:
     TemporaryDirectory() {
         const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
         path_ = std::filesystem::temp_directory_path() /
@@ -27,17 +27,17 @@ public:
         std::filesystem::remove_all(path_, error);
     }
 
-    const std::filesystem::path& path() const {
+    [[nodiscard]] const std::filesystem::path& path() const {
         return path_;
     }
 
-private:
+  private:
     std::filesystem::path path_;
 };
 
 std::string readText(const std::filesystem::path& path) {
     std::ifstream input(path);
-    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
 void testMetadataContent() {
@@ -60,20 +60,12 @@ void testMetadataContent() {
     record.statistics.deviceRemoved = true;
 
     const std::string metadata = rsp1b::renderMetadata(record);
-    for (const char* key : {"receiver = SDRplay RSP1B",
-                            "serial = REDACTED-TEST",
-                            "center_frequency_hz = 1575420000",
-                            "sample_rate_sps = 5000000",
-                            "bandwidth = 5 MHz",
-                            "if_type = zero IF",
-                            "bias_t = 0",
-                            "rf_notch = 0",
-                            "dab_notch = 0",
-                            "if_agc = sdrplay_api_AGC_50HZ",
-                            "duration_seconds_requested = 2.5",
-                            "total_complex_samples_written = 10",
-                            "output_format = interleaved_int16_iq",
-                            "byte_order = little_endian"}) {
+    for (const char* key :
+         {"receiver = SDRplay RSP1B", "serial = REDACTED-TEST", "center_frequency_hz = 1575420000",
+          "sample_rate_sps = 5000000", "bandwidth = 5 MHz", "if_type = zero IF", "bias_t = 0",
+          "rf_notch = 0", "dab_notch = 0", "if_agc = sdrplay_api_AGC_50HZ",
+          "duration_seconds_requested = 2.5", "total_complex_samples_written = 10",
+          "output_format = interleaved_int16_iq", "byte_order = little_endian"}) {
         CHECK_CONTAINS(metadata, key);
     }
     CHECK_CONTAINS(metadata, "callbacks_received = 4");
@@ -100,15 +92,14 @@ void testPathsAndTimestamp() {
     CHECK(rsp1b::metadataPathFor(upperTxtPath) != upperTxtPath);
 
     std::string error;
-    CHECK(rsp1b::validateDistinctOutputPaths(
-        txtPath, rsp1b::metadataPathFor(txtPath), error));
-    CHECK(rsp1b::validateDistinctOutputPaths(
-        upperTxtPath, rsp1b::metadataPathFor(upperTxtPath), error));
+    CHECK(rsp1b::validateDistinctOutputPaths(txtPath, rsp1b::metadataPathFor(txtPath), error));
+    CHECK(rsp1b::validateDistinctOutputPaths(upperTxtPath, rsp1b::metadataPathFor(upperTxtPath),
+                                             error));
     CHECK(!rsp1b::validateDistinctOutputPaths(txtPath, txtPath, error));
     CHECK_CONTAINS(error, "--force cannot authorize metadata");
 #if defined(_WIN32) || defined(__APPLE__)
-    CHECK(!rsp1b::validateDistinctOutputPaths(
-        "captures/case-sensitive-name.iq", "captures/CASE-SENSITIVE-NAME.IQ", error));
+    CHECK(!rsp1b::validateDistinctOutputPaths("captures/case-sensitive-name.iq",
+                                              "captures/CASE-SENSITIVE-NAME.IQ", error));
     CHECK_CONTAINS(error, "resolve to the same path");
 #endif
     CHECK(!rsp1b::formatLocalTimestamp(std::time(nullptr), "%Y%m%d_%H%M%S").empty());
@@ -165,11 +156,10 @@ void testMetadataDirectoryRejection() {
         child << "directory contents";
     }
 
-    rsp1b::MetadataRecord record;
     for (const bool overwriteAuthorized : {false, true}) {
+        rsp1b::MetadataRecord record;
         std::string error;
-        CHECK(!rsp1b::writeMetadataFile(
-            metadataPath, record, overwriteAuthorized, error));
+        CHECK(!rsp1b::writeMetadataFile(metadataPath, record, overwriteAuthorized, error));
         CHECK_CONTAINS(error, "not a regular file");
         CHECK(std::filesystem::is_directory(metadataPath));
         CHECK(readText(childPath) == "directory contents");
@@ -198,7 +188,7 @@ void testMetadataSymbolicLinkRejection() {
     CHECK(readText(targetPath) == "linked metadata sentinel");
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     testMetadataContent();

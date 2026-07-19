@@ -5,18 +5,14 @@
 
 namespace rsp1b {
 
-bool checkOutputPath(const std::filesystem::path& path,
-                     bool overwriteAuthorized,
-                     const std::string& outputDescription,
-                     bool& pathExisted,
-                     std::string& error);
+bool checkOutputPath(const std::filesystem::path& path, bool overwriteAuthorized,
+                     const std::string& outputDescription, bool& pathExisted, std::string& error);
 
 bool validateDistinctOutputPaths(const std::filesystem::path& iqPath,
-                                 const std::filesystem::path& metadataPath,
-                                 std::string& error);
+                                 const std::filesystem::path& metadataPath, std::string& error);
 
 class ExistingFileRollback {
-public:
+  public:
     ExistingFileRollback() = default;
     ~ExistingFileRollback() noexcept;
 
@@ -25,17 +21,15 @@ public:
     ExistingFileRollback(ExistingFileRollback&&) = delete;
     ExistingFileRollback& operator=(ExistingFileRollback&&) = delete;
 
-    bool preserve(const std::filesystem::path& path,
-                  bool preserveExistingFile,
-                  std::string& error);
+    bool preserve(const std::filesystem::path& path, bool preserveExistingFile, std::string& error);
     bool commit(std::string& error);
     bool restore(std::string& error);
-    bool active() const noexcept;
+    [[nodiscard]] bool active() const noexcept;
 
-private:
+  private:
     std::filesystem::path originalPath_;
     std::filesystem::path backupPath_;
     bool active_ = false;
 };
 
-}  // namespace rsp1b
+} // namespace rsp1b

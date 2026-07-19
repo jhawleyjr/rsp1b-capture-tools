@@ -8,19 +8,15 @@
 
 static_assert(sizeof(std::int16_t) == 2, "IQ samples require a 16-bit representation");
 
-#if !defined(_WIN32) &&                                                                    \
-    (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
+#if !defined(_WIN32) && (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
 #error "RSP1B Capture Tools currently supports little-endian targets only"
 #endif
 
 namespace rsp1b {
 
-IqWriter::IqWriter(std::unique_ptr<std::ostream> output,
-                   std::size_t maxQueuedBlocks,
+IqWriter::IqWriter(std::unique_ptr<std::ostream> output, std::size_t maxQueuedBlocks,
                    std::atomic<bool>* stopRequested)
-    : output_(std::move(output)),
-      maxQueuedBlocks_(maxQueuedBlocks),
-      stopRequested_(stopRequested) {
+    : output_(std::move(output)), maxQueuedBlocks_(maxQueuedBlocks), stopRequested_(stopRequested) {
     if (output_ == nullptr || maxQueuedBlocks_ == 0) {
         accepting_ = false;
         closing_ = true;
@@ -38,17 +34,15 @@ IqWriter::~IqWriter() noexcept {
 }
 
 std::unique_ptr<IqWriter> IqWriter::openFile(const std::filesystem::path& path,
-                                             bool overwriteAuthorized,
-                                             std::size_t maxQueuedBlocks,
-                                             std::atomic<bool>* stopRequested,
-                                             std::string& error) {
+                                             bool overwriteAuthorized, std::size_t maxQueuedBlocks,
+                                             std::atomic<bool>* stopRequested, std::string& error) {
     bool pathExisted = false;
     if (!checkOutputPath(path, overwriteAuthorized, "IQ output", pathExisted, error)) {
         return nullptr;
     }
 
-    auto output = std::make_unique<std::ofstream>(
-        path, std::ios::out | std::ios::binary | std::ios::trunc);
+    auto output =
+        std::make_unique<std::ofstream>(path, std::ios::out | std::ios::binary | std::ios::trunc);
     if (!*output) {
         error = "Unable to open IQ output: " + path.string();
         return nullptr;
@@ -57,7 +51,7 @@ std::unique_ptr<IqWriter> IqWriter::openFile(const std::filesystem::path& path,
 }
 
 EnqueueResult IqWriter::enqueue(IqBlock block) {
-    const std::uint64_t complexSamples = static_cast<std::uint64_t>(block.size() / 2U);
+    const auto complexSamples = static_cast<std::uint64_t>(block.size() / 2U);
     std::lock_guard<std::mutex> lock(mutex_);
     if (writerFailure_) {
         ++droppedBlockCount_;
@@ -183,4 +177,4 @@ void IqWriter::requestStop() noexcept {
     }
 }
 
-}  // namespace rsp1b
+} // namespace rsp1b

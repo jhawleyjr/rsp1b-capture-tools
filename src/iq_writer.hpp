@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -35,9 +34,8 @@ struct WriterStatistics {
 };
 
 class IqWriter {
-public:
-    IqWriter(std::unique_ptr<std::ostream> output,
-             std::size_t maxQueuedBlocks,
+  public:
+    IqWriter(std::unique_ptr<std::ostream> output, std::size_t maxQueuedBlocks,
              std::atomic<bool>* stopRequested = nullptr);
     ~IqWriter() noexcept;
 
@@ -47,17 +45,15 @@ public:
     IqWriter& operator=(IqWriter&&) = delete;
 
     static std::unique_ptr<IqWriter> openFile(const std::filesystem::path& path,
-                                              bool overwriteAuthorized,
-                                              std::size_t maxQueuedBlocks,
-                                              std::atomic<bool>* stopRequested,
-                                              std::string& error);
+                                              bool overwriteAuthorized, std::size_t maxQueuedBlocks,
+                                              std::atomic<bool>* stopRequested, std::string& error);
 
     EnqueueResult enqueue(IqBlock block);
     bool finish() noexcept;
     WriterStatistics statistics() const;
     std::string failureMessage() const;
 
-private:
+  private:
     void writerLoop() noexcept;
     void recordWriterFailure(const std::string& message, bool currentBlockWasDropped) noexcept;
     void requestStop() noexcept;
@@ -79,4 +75,4 @@ private:
     std::thread writerThread_;
 };
 
-}  // namespace rsp1b
+} // namespace rsp1b

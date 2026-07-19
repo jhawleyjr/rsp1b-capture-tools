@@ -26,14 +26,13 @@ std::filesystem::path metadataPathFor(const std::filesystem::path& iqPath) {
 }
 
 std::string renderMetadata(const MetadataRecord& record) {
-    const long double expectedSamples =
-        static_cast<long double>(record.options.durationSeconds) *
-        static_cast<long double>(record.options.sampleRateSps);
-    const long double maximumSamples =
+    const long double expectedSamples = static_cast<long double>(record.options.durationSeconds) *
+                                        static_cast<long double>(record.options.sampleRateSps);
+    constexpr auto maximumSamples =
         static_cast<long double>(std::numeric_limits<std::uint64_t>::max());
-    const std::uint64_t approximateSamples =
-        expectedSamples >= maximumSamples ? std::numeric_limits<std::uint64_t>::max()
-                                          : static_cast<std::uint64_t>(expectedSamples);
+    const std::uint64_t approximateSamples = expectedSamples >= maximumSamples
+                                                 ? std::numeric_limits<std::uint64_t>::max()
+                                                 : static_cast<std::uint64_t>(expectedSamples);
 
     std::ostringstream metadata;
     metadata << std::setprecision(15);
@@ -67,10 +66,8 @@ std::string renderMetadata(const MetadataRecord& record) {
     return metadata.str();
 }
 
-bool writeMetadataFile(const std::filesystem::path& path,
-                       const MetadataRecord& record,
-                       bool overwriteAuthorized,
-                       std::string& error) {
+bool writeMetadataFile(const std::filesystem::path& path, const MetadataRecord& record,
+                       bool overwriteAuthorized, std::string& error) {
     bool pathExisted = false;
     if (!checkOutputPath(path, overwriteAuthorized, "metadata output", pathExisted, error)) {
         return false;
@@ -91,4 +88,4 @@ bool writeMetadataFile(const std::filesystem::path& path,
     return true;
 }
 
-}  // namespace rsp1b
+} // namespace rsp1b

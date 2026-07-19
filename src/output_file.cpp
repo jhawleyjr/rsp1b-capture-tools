@@ -15,8 +15,7 @@ std::string refusedReplacementMessage(const std::filesystem::path& path,
            std::string(reason) + "; --force only replaces existing regular files.";
 }
 
-bool pathsEqualForPlatform(const std::filesystem::path& left,
-                           const std::filesystem::path& right) {
+bool pathsEqualForPlatform(const std::filesystem::path& left, const std::filesystem::path& right) {
     const std::string leftText = left.generic_string();
     const std::string rightText = right.generic_string();
 #if defined(_WIN32) || defined(__APPLE__)
@@ -25,9 +24,8 @@ bool pathsEqualForPlatform(const std::filesystem::path& left,
     }
     for (std::size_t index = 0; index < leftText.size(); ++index) {
         const auto foldAscii = [](char character) {
-            return character >= 'A' && character <= 'Z'
-                       ? static_cast<char>(character - 'A' + 'a')
-                       : character;
+            return character >= 'A' && character <= 'Z' ? static_cast<char>(character - 'A' + 'a')
+                                                        : character;
         };
         if (foldAscii(leftText[index]) != foldAscii(rightText[index])) {
             return false;
@@ -39,8 +37,7 @@ bool pathsEqualForPlatform(const std::filesystem::path& left,
 #endif
 }
 
-bool normalizedPath(const std::filesystem::path& path,
-                    std::filesystem::path& normalized,
+bool normalizedPath(const std::filesystem::path& path, std::filesystem::path& normalized,
                     std::string& error) {
     std::error_code filesystemError;
     normalized = std::filesystem::weakly_canonical(path, filesystemError);
@@ -52,13 +49,10 @@ bool normalizedPath(const std::filesystem::path& path,
     return true;
 }
 
-}  // namespace
+} // namespace
 
-bool checkOutputPath(const std::filesystem::path& path,
-                     bool overwriteAuthorized,
-                     const std::string& outputDescription,
-                     bool& pathExisted,
-                     std::string& error) {
+bool checkOutputPath(const std::filesystem::path& path, bool overwriteAuthorized,
+                     const std::string& outputDescription, bool& pathExisted, std::string& error) {
     error.clear();
     std::error_code filesystemError;
     const std::filesystem::file_status status =
@@ -87,8 +81,7 @@ bool checkOutputPath(const std::filesystem::path& path,
 }
 
 bool validateDistinctOutputPaths(const std::filesystem::path& iqPath,
-                                 const std::filesystem::path& metadataPath,
-                                 std::string& error) {
+                                 const std::filesystem::path& metadataPath, std::string& error) {
     error.clear();
     std::filesystem::path normalizedIqPath;
     std::filesystem::path normalizedMetadataPath;
@@ -105,8 +98,7 @@ bool validateDistinctOutputPaths(const std::filesystem::path& iqPath,
         const bool metadataExists = std::filesystem::exists(metadataPath, metadataError);
         if (iqError || metadataError) {
             const std::error_code& filesystemError = iqError ? iqError : metadataError;
-            error = "Unable to compare IQ and metadata output paths: " +
-                    filesystemError.message();
+            error = "Unable to compare IQ and metadata output paths: " + filesystemError.message();
             return false;
         }
         if (iqExists && metadataExists) {
@@ -140,8 +132,7 @@ ExistingFileRollback::~ExistingFileRollback() noexcept {
     std::filesystem::rename(backupPath_, originalPath_, filesystemError);
 }
 
-bool ExistingFileRollback::preserve(const std::filesystem::path& path,
-                                    bool preserveExistingFile,
+bool ExistingFileRollback::preserve(const std::filesystem::path& path, bool preserveExistingFile,
                                     std::string& error) {
     error.clear();
     if (!preserveExistingFile) {
@@ -249,4 +240,4 @@ bool ExistingFileRollback::active() const noexcept {
     return active_;
 }
 
-}  // namespace rsp1b
+} // namespace rsp1b

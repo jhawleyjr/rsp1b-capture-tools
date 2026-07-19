@@ -35,12 +35,8 @@ void updateMaximum(std::atomic<int>& target, int value) {
     }
 }
 
-void streamCallback(short* xi,
-                    short* xq,
-                    sdrplay_api_StreamCbParamsT*,
-                    unsigned int sampleCount,
-                    unsigned int reset,
-                    void* callbackContext) {
+void streamCallback(short* xi, short* xq, sdrplay_api_StreamCbParamsT*, unsigned int sampleCount,
+                    unsigned int reset, void* callbackContext) {
     auto* deviceContext = static_cast<rsp1b::DeviceCallbackContext*>(callbackContext);
     if (deviceContext == nullptr || deviceContext->streamContext == nullptr ||
         (sampleCount != 0 && (xi == nullptr || xq == nullptr))) {
@@ -68,8 +64,7 @@ void streamCallback(short* xi,
 void printStatistics(const StreamStatistics& statistics) {
     const std::uint64_t totalSamples = statistics.totalSamples.load(std::memory_order_relaxed);
     std::cout << "Stream statistics:\n"
-              << "  callbacks="
-              << statistics.callbackCount.load(std::memory_order_relaxed) << '\n'
+              << "  callbacks=" << statistics.callbackCount.load(std::memory_order_relaxed) << '\n'
               << "  total_complex_samples=" << totalSamples << '\n'
               << "  resets=" << statistics.resetCount.load(std::memory_order_relaxed) << '\n';
     if (totalSamples != 0) {
@@ -161,7 +156,7 @@ int runProbe() {
     return success ? 0 : 1;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     try {
