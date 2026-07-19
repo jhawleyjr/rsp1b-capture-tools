@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a reproducible problem with the portable logic or genuine RSP1B tools.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not include receiver serial numbers, credentials, or sensitive paths. Security issues
+        should follow SECURITY.md instead of using this public form.
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Include the OS name and version.
+    validations:
+      required: true
+  - type: input
+    id: toolchain
+    attributes:
+      label: Compiler and CMake
+      description: Include compiler and CMake versions.
+    validations:
+      required: true
+  - type: input
+    id: api
+    attributes:
+      label: SDRplay API version
+      description: State the compile-time and runtime versions, or "not applicable".
+    validations:
+      required: true
+  - type: input
+    id: receiver
+    attributes:
+      label: Receiver model
+      description: Confirm whether a genuine SDRplay RSP1B was used.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command
+      description: Paste the configure, build, test, probe, or capture command.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: bias_t
+    attributes:
+      label: Bias-T status
+      options:
+        - Disabled
+        - Enabled with compatible hardware
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include expected behavior, actual behavior, and whether it reproduces without hardware.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Remove serial numbers, credentials, usernames, and sensitive filesystem paths.
+      render: text

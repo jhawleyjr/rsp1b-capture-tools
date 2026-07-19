@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a focused improvement for genuine SDRplay RSP1B workflows.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Explain the RSP1B-specific problem this feature would solve.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired CLI, output, build, or test behavior.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, compiler, CMake, and SDRplay API versions where relevant.
+  - type: input
+    id: receiver
+    attributes:
+      label: Receiver model
+      description: Confirm whether the request is for a genuine SDRplay RSP1B.
+    validations:
+      required: true
+  - type: dropdown
+    id: bias_t
+    attributes:
+      label: Would this affect Bias-T behavior?
+      options:
+        - "No"
+        - "Yes, Bias-T would remain disabled by default"
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: hardware_independent
+    attributes:
+      label: SDK-independent testing
+      description: Explain which parts can be reproduced or tested without hardware.
