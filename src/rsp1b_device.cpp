@@ -8,25 +8,25 @@
 namespace rsp1b {
 namespace {
 
-const char* errorString(sdrplay_api_ErrT error) {
+const char* errorString(const sdrplay_api_ErrT error) {
     const char* text = sdrplay_api_GetErrorString(error);
     return text != nullptr ? text : "(no error string)";
 }
 
 const char* tunerName(sdrplay_api_TunerSelectT tuner) {
     switch (tuner) {
-        case sdrplay_api_Tuner_A:
-            return "A";
-        case sdrplay_api_Tuner_B:
-            return "B";
-        case sdrplay_api_Tuner_Both:
-            return "both";
-        default:
-            return "unknown";
+    case sdrplay_api_Tuner_A:
+        return "A";
+    case sdrplay_api_Tuner_B:
+        return "B";
+    case sdrplay_api_Tuner_Both:
+        return "both";
+    default:
+        return "unknown";
     }
 }
 
-}  // namespace
+} // namespace
 
 DeviceSession::DeviceSession(std::ostream& output, std::ostream& errors) noexcept
     : output_(output), errors_(errors) {}
@@ -52,8 +52,7 @@ bool DeviceSession::connect() {
     output_ << std::fixed << std::setprecision(2)
             << "SDRplay API version: compile-time=" << SDRPLAY_API_VERSION
             << ", runtime=" << runtimeApiVersion_ << '\n';
-    if (SDRPLAY_API_VERSION < kMinimumRsp1bApiVersion ||
-        runtimeApiVersion_ < kMinimumRsp1bApiVersion) {
+    if (runtimeApiVersion_ < kMinimumRsp1bApiVersion) {
         errors_ << "RSP1B requires SDRplay API 3.14 or newer.\n";
         return false;
     }
@@ -71,8 +70,8 @@ bool DeviceSession::connect() {
     std::array<sdrplay_api_DeviceT, SDRPLAY_MAX_DEVICES> devices{};
     unsigned int deviceCount = 0;
     if (!callSucceeded("sdrplay_api_GetDevices",
-                       sdrplay_api_GetDevices(
-                           devices.data(), &deviceCount, static_cast<unsigned int>(devices.size())))) {
+                       sdrplay_api_GetDevices(devices.data(), &deviceCount,
+                                              static_cast<unsigned int>(devices.size())))) {
         return false;
     }
 
@@ -217,17 +216,15 @@ bool DeviceSession::shutdown() {
     return success;
 }
 
-bool DeviceSession::acknowledgePowerOverload(sdrplay_api_TunerSelectT tuner) {
+bool DeviceSession::acknowledgePowerOverload(sdrplay_api_TunerSelectT tuner) const {
     if (!deviceSelected_) {
         errors_ << "Cannot acknowledge a power-overload event without a selected device.\n";
         return false;
     }
-    return callSucceeded(
-        "sdrplay_api_Update(OverloadMsgAck)",
-        sdrplay_api_Update(device_.dev,
-                           tuner,
-                           sdrplay_api_Update_Ctrl_OverloadMsgAck,
-                           sdrplay_api_Update_Ext1_None));
+    return callSucceeded("sdrplay_api_Update(OverloadMsgAck)",
+                         sdrplay_api_Update(device_.dev, tuner,
+                                            sdrplay_api_Update_Ctrl_OverloadMsgAck,
+                                            sdrplay_api_Update_Ext1_None));
 }
 
 const sdrplay_api_DeviceT& DeviceSession::device() const noexcept {
@@ -238,13 +235,13 @@ float DeviceSession::runtimeApiVersion() const noexcept {
     return runtimeApiVersion_;
 }
 
-bool DeviceSession::callSucceeded(const char* operation, sdrplay_api_ErrT error) {
+bool DeviceSession::callSucceeded(const char* operation, sdrplay_api_ErrT error) const {
     if (error == sdrplay_api_Success) {
         output_ << operation << " -> success\n";
         return true;
     }
-    errors_ << operation << " failed: " << static_cast<int>(error) << " ("
-            << errorString(error) << ")\n";
+    errors_ << operation << " failed: " << static_cast<int>(error) << " (" << errorString(error)
+            << ")\n";
     return false;
 }
 
@@ -253,7 +250,8 @@ bool DeviceSession::disableBiasT() {
         return true;
     }
     if (deviceParams_ == nullptr || deviceParams_->rxChannelA == nullptr) {
-        errors_ << "Shutdown could not request Bias-T off because device parameters are unavailable.\n";
+        errors_
+            << "Shutdown could not request Bias-T off because device parameters are unavailable.\n";
         return false;
     }
 
@@ -263,70 +261,65 @@ bool DeviceSession::disableBiasT() {
     if (!deviceInitialised_) {
         return true;
     }
-    return callSucceeded(
-        "sdrplay_api_Update(Rsp1a_BiasTControl)",
-        sdrplay_api_Update(device_.dev,
-                           device_.tuner,
-                           sdrplay_api_Update_Rsp1a_BiasTControl,
-                           sdrplay_api_Update_Ext1_None));
+    return callSucceeded("sdrplay_api_Update(Rsp1a_BiasTControl)",
+                         sdrplay_api_Update(device_.dev, device_.tuner,
+                                            sdrplay_api_Update_Rsp1a_BiasTControl,
+                                            sdrplay_api_Update_Ext1_None));
 }
 
-void DeviceSession::printDevice(const sdrplay_api_DeviceT& device, unsigned int index) {
+void DeviceSession::printDevice(const sdrplay_api_DeviceT& device, unsigned int index) const {
     output_ << "  Device[" << index << "] serial=" << device.SerNo
             << " hwVer=" << static_cast<unsigned int>(device.hwVer)
             << " tuner=" << static_cast<int>(device.tuner)
             << " valid=" << static_cast<unsigned int>(device.valid) << '\n';
 }
 
-void eventCallback(sdrplay_api_EventT eventId,
-                   sdrplay_api_TunerSelectT tuner,
-                   sdrplay_api_EventParamsT* parameters,
-                   void* callbackContext) {
+void eventCallback(sdrplay_api_EventT eventId, sdrplay_api_TunerSelectT tuner,
+                   sdrplay_api_EventParamsT* parameters, void* callbackContext) {
     auto* context = static_cast<DeviceCallbackContext*>(callbackContext);
     if (context == nullptr || context->events == nullptr) {
         return;
     }
 
     switch (eventId) {
-        case sdrplay_api_PowerOverloadChange: {
-            context->events->powerOverloadEventCount.fetch_add(1, std::memory_order_relaxed);
-            const char* change = "unknown";
-            if (parameters != nullptr) {
-                change = parameters->powerOverloadParams.powerOverloadChangeType ==
-                                 sdrplay_api_Overload_Detected
-                             ? "detected"
-                             : "corrected";
-            }
-            std::cout << "Event: power overload " << change << " on tuner " << tunerName(tuner)
-                      << ".\n";
-            if (context->session == nullptr ||
-                !context->session->acknowledgePowerOverload(tuner)) {
-                context->events->powerOverloadAcknowledgementFailures.fetch_add(
-                    1, std::memory_order_relaxed);
-                context->events->stopRequested.store(true, std::memory_order_relaxed);
-            }
-            break;
+    case sdrplay_api_PowerOverloadChange: {
+        context->events->powerOverloadEventCount.fetch_add(1, std::memory_order_relaxed);
+        const char* change = "unknown";
+        if (parameters != nullptr) {
+            change = parameters->powerOverloadParams.powerOverloadChangeType ==
+                             sdrplay_api_Overload_Detected
+                         ? "detected"
+                         : "corrected";
         }
-        case sdrplay_api_DeviceRemoved:
-            std::cerr << "Event: the selected RSP1B was removed; stopping gracefully.\n";
-            context->events->deviceRemoved.store(true, std::memory_order_relaxed);
+        std::cout << "Event: power overload " << change << " on tuner " << tunerName(tuner)
+                  << ".\n";
+        if (context->session == nullptr || !context->session->acknowledgePowerOverload(tuner)) {
+            context->events->powerOverloadAcknowledgementFailures.fetch_add(
+                1, std::memory_order_relaxed);
             context->events->stopRequested.store(true, std::memory_order_relaxed);
-            break;
-        case sdrplay_api_GainChange:
-            if (parameters != nullptr) {
-                std::cout << "Event: gain change on tuner " << tunerName(tuner)
-                          << ", gRdB=" << parameters->gainParams.gRdB
-                          << ", lnaGRdB=" << parameters->gainParams.lnaGRdB
-                          << ", systemGain=" << parameters->gainParams.currGain << ".\n";
-            } else {
-                std::cout << "Event: gain change on tuner " << tunerName(tuner) << ".\n";
-            }
-            break;
-        default:
-            std::cout << "Event: id=" << static_cast<int>(eventId)
-                      << ", tuner=" << tunerName(tuner) << ".\n";
-            break;
+        }
+        break;
+    }
+    case sdrplay_api_DeviceRemoved:
+        std::cerr << "Event: the selected RSP1B was removed; stopping gracefully.\n";
+        context->events->deviceRemoved.store(true, std::memory_order_relaxed);
+        context->events->stopRequested.store(true, std::memory_order_relaxed);
+        break;
+    case sdrplay_api_GainChange:
+        if (parameters != nullptr) {
+            std::cout << "Event: gain change on tuner " << tunerName(tuner)
+                      << ", gRdB=" << parameters->gainParams.gRdB
+                      << ", lnaGRdB=" << parameters->gainParams.lnaGRdB
+                      << ", systemGain=" << parameters->gainParams.currGain << ".\n";
+        } else {
+            std::cout << "Event: gain change on tuner " << tunerName(tuner) << ".\n";
+        }
+        break;
+    default:
+        std::cout << "Event: id=" << static_cast<int>(eventId) << ", tuner=" << tunerName(tuner)
+                  << ".\n";
+        break;
     }
 }
 
-}  // namespace rsp1b
+} // namespace rsp1b

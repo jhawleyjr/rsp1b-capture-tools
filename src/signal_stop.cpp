@@ -11,7 +11,7 @@ extern "C" void stopSignalHandler(int) {
     stopRequested = 1;
 }
 
-}  // namespace
+} // namespace
 
 bool installStopSignalHandlers(std::string& error) noexcept {
     stopRequested = 0;
@@ -32,4 +32,4 @@ bool signalStopRequested() noexcept {
     return stopRequested != 0;
 }
 
-}  // namespace rsp1b
+} // namespace rsp1b

@@ -16,18 +16,9 @@ rsp1b::ParseOutcome parse(std::initializer_list<const char*> arguments) {
 }
 
 void testValidOptions() {
-    const auto outcome = parse({"capture",
-                                "--duration",
-                                "2.5",
-                                "--out",
-                                "test.iq",
-                                "--force",
-                                "--bias-t",
-                                "1",
-                                "--center",
-                                "100.25",
-                                "--sample-rate",
-                                "2000000.5"});
+    const auto outcome =
+        parse({"capture", "--duration", "2.5", "--out", "test.iq", "--force", "--bias-t", "1",
+               "--center", "100.25", "--sample-rate", "2000000.5"});
     CHECK(outcome.result == rsp1b::ParseResult::success);
     CHECK(outcome.options.durationSeconds == 2.5);
     CHECK(outcome.options.outputPath == "test.iq");
@@ -81,7 +72,7 @@ void testInvalidOptions() {
     }
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     testValidOptions();

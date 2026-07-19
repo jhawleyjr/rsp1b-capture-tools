@@ -3,6 +3,7 @@
 #include "output_file.hpp"
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -21,7 +22,7 @@
 namespace {
 
 class TemporaryDirectory {
-public:
+  public:
     TemporaryDirectory() {
         const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
         path_ = std::filesystem::temp_directory_path() /
@@ -34,16 +35,16 @@ public:
         std::filesystem::remove_all(path_, error);
     }
 
-    const std::filesystem::path& path() const {
+    [[nodiscard]] const std::filesystem::path& path() const {
         return path_;
     }
 
-private:
+  private:
     std::filesystem::path path_;
 };
 
 class FailingStreamBuffer : public std::streambuf {
-protected:
+  protected:
     std::streamsize xsputn(const char*, std::streamsize) override {
         return 0;
     }
@@ -54,7 +55,7 @@ protected:
 };
 
 class BlockingStreamBuffer : public std::streambuf {
-public:
+  public:
     void waitUntilWriting() {
         std::unique_lock<std::mutex> lock(mutex_);
         changed_.wait(lock, [&] { return writing_; });
@@ -68,7 +69,7 @@ public:
         changed_.notify_all();
     }
 
-protected:
+  protected:
     std::streamsize xsputn(const char*, std::streamsize count) override {
         std::unique_lock<std::mutex> lock(mutex_);
         writing_ = true;
@@ -77,7 +78,7 @@ protected:
         return count;
     }
 
-private:
+  private:
     std::mutex mutex_;
     std::condition_variable changed_;
     bool writing_ = false;
@@ -85,7 +86,7 @@ private:
 };
 
 class BlockingFailingStreamBuffer : public std::streambuf {
-public:
+  public:
     void waitUntilWriting() {
         std::unique_lock<std::mutex> lock(mutex_);
         changed_.wait(lock, [&] { return writing_; });
@@ -99,7 +100,7 @@ public:
         changed_.notify_all();
     }
 
-protected:
+  protected:
     std::streamsize xsputn(const char*, std::streamsize) override {
         std::unique_lock<std::mutex> lock(mutex_);
         writing_ = true;
@@ -108,7 +109,7 @@ protected:
         return 0;
     }
 
-private:
+  private:
     std::mutex mutex_;
     std::condition_variable changed_;
     bool writing_ = false;
@@ -127,24 +128,21 @@ std::vector<std::int16_t> readSamples(const std::filesystem::path& path) {
 
 std::string readText(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
-    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
 }
 
 bool hasRollbackBackup(const std::filesystem::path& directory) {
-    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-        if (entry.path().filename().string().find(".rsp1b-backup") != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
+    return std::any_of(
+        std::filesystem::directory_iterator{directory}, std::filesystem::directory_iterator{},
+        [](const std::filesystem::directory_entry& entry) {
+            return entry.path().filename().string().find(".rsp1b-backup") != std::string::npos;
+        });
 }
 
-bool waitForWriterFailure(const rsp1b::IqWriter& writer,
-                          const std::atomic<bool>& stopRequested) {
+bool waitForWriterFailure(const rsp1b::IqWriter& writer, const std::atomic<bool>& stopRequested) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (std::chrono::steady_clock::now() < deadline) {
-        if (stopRequested.load(std::memory_order_relaxed) ||
-            writer.statistics().writerFailure) {
+        if (stopRequested.load(std::memory_order_relaxed) || writer.statistics().writerFailure) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -223,8 +221,7 @@ void testEnqueueRejectedAfterWriteFailureIsCounted() {
     CHECK(beforeRejectedEnqueue.writerFailure);
     CHECK(writer.enqueue({3, 4, 5, 6}) == rsp1b::EnqueueResult::writerFailed);
     const auto afterRejectedEnqueue = writer.statistics();
-    CHECK(afterRejectedEnqueue.droppedBlockCount ==
-          beforeRejectedEnqueue.droppedBlockCount + 1);
+    CHECK(afterRejectedEnqueue.droppedBlockCount == beforeRejectedEnqueue.droppedBlockCount + 1);
     CHECK(afterRejectedEnqueue.samplesAccepted == beforeRejectedEnqueue.samplesAccepted);
 
     CHECK(!writer.finish());
@@ -256,8 +253,8 @@ void testQueueOverflow() {
 void testEmptyStop() {
     TemporaryDirectory temporaryDirectory;
     std::string error;
-    auto writer = rsp1b::IqWriter::openFile(
-        temporaryDirectory.path() / "empty.iq", false, 2, nullptr, error);
+    auto writer =
+        rsp1b::IqWriter::openFile(temporaryDirectory.path() / "empty.iq", false, 2, nullptr, error);
     CHECK(writer != nullptr);
     CHECK(writer->finish());
     CHECK(writer->statistics().samplesWritten == 0);
@@ -304,8 +301,8 @@ void testDirectoryOutputRejection() {
 
     for (const bool overwriteAuthorized : {false, true}) {
         std::string error;
-        auto writer = rsp1b::IqWriter::openFile(
-            directoryPath, overwriteAuthorized, 2, nullptr, error);
+        auto writer =
+            rsp1b::IqWriter::openFile(directoryPath, overwriteAuthorized, 2, nullptr, error);
         CHECK(writer == nullptr);
         CHECK_CONTAINS(error, "not a regular file");
         CHECK(std::filesystem::is_directory(directoryPath));
@@ -382,7 +379,7 @@ void testForcedOutputRollbackBeforeInitialization() {
     CHECK(readText(outputPath) == "authorized replacement");
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     testOrderingAndDrain();

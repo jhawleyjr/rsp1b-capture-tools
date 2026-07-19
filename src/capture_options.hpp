@@ -34,4 +34,4 @@ struct ParseOutcome {
 ParseOutcome parseCaptureOptions(const std::vector<std::string>& arguments);
 std::string captureUsage(const std::string& programName);
 
-}  // namespace rsp1b
+} // namespace rsp1b

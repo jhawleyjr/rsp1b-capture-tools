@@ -30,7 +30,7 @@ ParseOutcome errorOutcome(std::string message) {
     return outcome;
 }
 
-}  // namespace
+} // namespace
 
 std::string captureUsage(const std::string& programName) {
     return "Usage:\n"
@@ -138,4 +138,4 @@ ParseOutcome parseCaptureOptions(const std::vector<std::string>& arguments) {
     return outcome;
 }
 
-}  // namespace rsp1b
+} // namespace rsp1b

@@ -31,18 +31,13 @@ struct CaptureStreamState {
 std::uint64_t approximateExpectedSamples(const rsp1b::CaptureOptions& options) {
     const long double expected = static_cast<long double>(options.durationSeconds) *
                                  static_cast<long double>(options.sampleRateSps);
-    const long double maximum =
-        static_cast<long double>(std::numeric_limits<std::uint64_t>::max());
+    const long double maximum = static_cast<long double>(std::numeric_limits<std::uint64_t>::max());
     return expected >= maximum ? std::numeric_limits<std::uint64_t>::max()
                                : static_cast<std::uint64_t>(expected);
 }
 
-void streamCallback(short* xi,
-                    short* xq,
-                    sdrplay_api_StreamCbParamsT*,
-                    unsigned int sampleCount,
-                    unsigned int reset,
-                    void* callbackContext) {
+void streamCallback(short* xi, short* xq, sdrplay_api_StreamCbParamsT*, unsigned int sampleCount,
+                    unsigned int reset, void* callbackContext) {
     auto* deviceContext = static_cast<rsp1b::DeviceCallbackContext*>(callbackContext);
     if (deviceContext == nullptr || deviceContext->events == nullptr ||
         deviceContext->streamContext == nullptr) {
@@ -84,8 +79,8 @@ bool createOutputDirectory(const std::filesystem::path& outputPath, std::string&
     std::error_code filesystemError;
     std::filesystem::create_directories(directory, filesystemError);
     if (filesystemError) {
-        error = "Unable to create output directory '" + directory.string() + "': " +
-                filesystemError.message();
+        error = "Unable to create output directory '" + directory.string() +
+                "': " + filesystemError.message();
         return false;
     }
     return true;
@@ -190,11 +185,9 @@ int runCapture(int argc, char** argv) {
     }
 
     std::string writerError;
-    writer = rsp1b::IqWriter::openFile(options.outputPath,
-                                       options.force,
-                                       rsp1b::kDefaultMaxQueuedBlocks,
-                                       &events.stopRequested,
-                                       writerError);
+    writer =
+        rsp1b::IqWriter::openFile(options.outputPath, options.force, rsp1b::kDefaultMaxQueuedBlocks,
+                                  &events.stopRequested, writerError);
     if (writer == nullptr) {
         std::cerr << writerError << '\n';
         if (!outputRollback.restore(filesystemError)) {
@@ -277,8 +270,7 @@ int runCapture(int argc, char** argv) {
     statistics.writerFailure = writerStatistics.writerFailure;
     statistics.interrupted = interrupted;
     statistics.deviceRemoved = events.deviceRemoved.load(std::memory_order_relaxed);
-    statistics.overloadEventCount =
-        events.powerOverloadEventCount.load(std::memory_order_relaxed);
+    statistics.overloadEventCount = events.powerOverloadEventCount.load(std::memory_order_relaxed);
     statistics.overloadAcknowledgementFailures =
         events.powerOverloadAcknowledgementFailures.load(std::memory_order_relaxed);
 
@@ -294,7 +286,8 @@ int runCapture(int argc, char** argv) {
               << "  expected_samples_approx=" << approximateExpectedSamples(options) << '\n';
 
     if (capture.callbackFailure.load(std::memory_order_relaxed)) {
-        std::cerr << "The stream callback encountered invalid input or could not allocate an IQ block.\n";
+        std::cerr
+            << "The stream callback encountered invalid input or could not allocate an IQ block.\n";
         success = false;
     }
     if (statistics.queueOverflowCount != 0) {
@@ -341,7 +334,7 @@ int runCapture(int argc, char** argv) {
     return success ? 0 : 1;
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv) {
     try {

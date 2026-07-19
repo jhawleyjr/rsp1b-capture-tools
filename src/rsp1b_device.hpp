@@ -33,7 +33,7 @@ struct DeviceCallbackContext {
 };
 
 class DeviceSession {
-public:
+  public:
     DeviceSession(std::ostream& output, std::ostream& errors) noexcept;
     ~DeviceSession() noexcept;
 
@@ -48,15 +48,15 @@ public:
                     DeviceCallbackContext& callbackContext);
     bool stopStreaming();
     bool shutdown();
-    bool acknowledgePowerOverload(sdrplay_api_TunerSelectT tuner);
+    [[nodiscard]] bool acknowledgePowerOverload(sdrplay_api_TunerSelectT tuner) const;
 
-    const sdrplay_api_DeviceT& device() const noexcept;
-    float runtimeApiVersion() const noexcept;
+    [[nodiscard]] const sdrplay_api_DeviceT& device() const noexcept;
+    [[nodiscard]] float runtimeApiVersion() const noexcept;
 
-private:
-    bool callSucceeded(const char* operation, sdrplay_api_ErrT error);
+  private:
+    bool callSucceeded(const char* operation, sdrplay_api_ErrT error) const;
     bool disableBiasT();
-    void printDevice(const sdrplay_api_DeviceT& device, unsigned int index);
+    void printDevice(const sdrplay_api_DeviceT& device, unsigned int index) const;
 
     std::ostream& output_;
     std::ostream& errors_;
@@ -70,9 +70,7 @@ private:
     sdrplay_api_DeviceParamsT* deviceParams_ = nullptr;
 };
 
-void eventCallback(sdrplay_api_EventT eventId,
-                   sdrplay_api_TunerSelectT tuner,
-                   sdrplay_api_EventParamsT* parameters,
-                   void* callbackContext);
+void eventCallback(sdrplay_api_EventT eventId, sdrplay_api_TunerSelectT tuner,
+                   sdrplay_api_EventParamsT* parameters, void* callbackContext);
 
-}  // namespace rsp1b
+} // namespace rsp1b

@@ -13,7 +13,7 @@ bool localTime(std::time_t time, std::tm& result) noexcept {
 #endif
 }
 
-}  // namespace
+} // namespace
 
 std::string formatLocalTimestamp(std::time_t time, const char* format) {
     if (format == nullptr) {
@@ -30,7 +30,7 @@ std::string formatLocalTimestamp(std::time_t time, const char* format) {
     if (length == 0) {
         return {};
     }
-    return std::string(buffer.data(), length);
+    return {buffer.data(), length};
 }
 
 std::string localTimestampForName() {
@@ -49,4 +49,4 @@ std::string localTimestampMetadata() {
     return formatLocalTimestamp(now, "%Y-%m-%d %H:%M:%S %Z");
 }
 
-}  // namespace rsp1b
+} // namespace rsp1b

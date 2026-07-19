@@ -9,4 +9,4 @@ std::string formatLocalTimestamp(std::time_t time, const char* format);
 std::string localTimestampForName();
 std::string localTimestampMetadata();
 
-}  // namespace rsp1b
+} // namespace rsp1b
