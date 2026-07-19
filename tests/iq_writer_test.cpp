@@ -3,6 +3,7 @@
 #include "output_file.hpp"
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -17,7 +18,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <algorithm>
 
 namespace {
 

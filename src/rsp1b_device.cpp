@@ -156,7 +156,7 @@ bool DeviceSession::initialise(sdrplay_api_StreamCallback_t streamCallback,
     sdrplay_api_CallbackFnsT callbacks{};
     callbacks.StreamACbFn = streamCallback;
     callbacks.StreamBCbFn = nullptr;
-    callbacks.EventCbFn = reinterpret_cast<sdrplay_api_EventCallback_t>(eventCallback);
+    callbacks.EventCbFn = eventCallback;
     if (!callSucceeded("sdrplay_api_Init",
                        sdrplay_api_Init(device_.dev, &callbacks, &callbackContext))) {
         callbackContext.session = nullptr;
@@ -275,7 +275,7 @@ void DeviceSession::printDevice(const sdrplay_api_DeviceT& device, unsigned int 
 }
 
 void eventCallback(sdrplay_api_EventT eventId, sdrplay_api_TunerSelectT tuner,
-                   const sdrplay_api_EventParamsT* parameters, void* callbackContext) {
+                   sdrplay_api_EventParamsT* parameters, void* callbackContext) {
     auto* context = static_cast<DeviceCallbackContext*>(callbackContext);
     if (context == nullptr || context->events == nullptr) {
         return;

@@ -3,8 +3,8 @@
 #include "timestamp.hpp"
 
 #include <cerrno>
-#include <cstdlib>
 #include <cmath>
+#include <cstdlib>
 #include <utility>
 
 namespace rsp1b {

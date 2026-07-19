@@ -71,6 +71,6 @@ class DeviceSession {
 };
 
 void eventCallback(sdrplay_api_EventT eventId, sdrplay_api_TunerSelectT tuner,
-                   const sdrplay_api_EventParamsT* parameters, void* callbackContext);
+                   sdrplay_api_EventParamsT* parameters, void* callbackContext);
 
 } // namespace rsp1b
